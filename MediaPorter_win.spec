@@ -1,0 +1,90 @@
+# -*- mode: python ; coding: utf-8 -*-
+# PyInstaller spec for Windows .exe
+# Build: pyinstaller MediaPorter_win.spec
+
+block_cipher = None
+
+a = Analysis(
+    ['main.py'],
+    pathex=['.'],
+    binaries=[],
+    datas=[
+        ('appicon.ico', '.'),
+    ],
+    hiddenimports=[
+        'PySide6.QtCore',
+        'PySide6.QtGui',
+        'PySide6.QtWidgets',
+        'PySide6.QtNetwork',
+        'sqlalchemy.dialects.sqlite',
+        'sqlalchemy.pool',
+        'exifread',
+        'pymediainfo',
+        'tomllib',
+        'tomli_w',
+        'win32api',
+        'win32con',
+        'backend.core.scanner',
+        'backend.core.importer',
+        'backend.core.rules',
+        'backend.core.dedup',
+        'backend.core.safety',
+        'backend.core.inspector',
+        'backend.core.models',
+        'backend.core.camera_profiles',
+        'backend.db.models',
+        'backend.db.repository',
+        'backend.utils.detector',
+        'backend.utils.config',
+        'backend.utils.log_setup',
+        'gui.main_window',
+        'gui.theme',
+        'gui.widgets.source_panel',
+        'gui.widgets.dest_panel',
+        'gui.widgets.file_table',
+        'gui.widgets.history_panel',
+        'gui.widgets.settings_panel',
+    ],
+    hookspath=[],
+    hooksconfig={},
+    runtime_hooks=[],
+    excludes=['tkinter', 'matplotlib', 'numpy', 'scipy'],
+    win_no_prefer_redirects=False,
+    win_private_assemblies=False,
+    cipher=block_cipher,
+    noarchive=False,
+)
+
+pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+
+exe = EXE(
+    pyz,
+    a.scripts,
+    a.binaries,
+    a.zipfiles,
+    a.datas,
+    [],
+    name='MediaPorter',
+    debug=False,
+    bootloader_ignore_signals=False,
+    strip=False,
+    upx=True,
+    upx_exclude=[],
+    runtime_tmpdir=None,
+    console=False,       # no console window
+    disable_windowed_traceback=False,
+    argv_emulation=False,
+    target_arch=None,
+    codesign_identity=None,
+    entitlements_file=None,
+    icon='appicon.ico',
+    version_info={
+        'FileVersion': (1, 0, 0, 0),
+        'ProductVersion': (1, 0, 0, 0),
+        'FileDescription': 'Media Porter — SD card importer',
+        'ProductName': 'Media Porter',
+        'CompanyName': '',
+        'LegalCopyright': '© 2026 Media Porter',
+        'OriginalFilename': 'MediaPorter.exe',
+    },
+)
