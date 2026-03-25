@@ -1,4 +1,4 @@
-# Media Mporter — Project Plan
+# Media Porter — Project Plan
 
 ## Vision
 A cross-platform desktop app (Mac + Windows) that imports media from camera SD cards

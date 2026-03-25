@@ -1,4 +1,4 @@
-# Media Mporter
+# Media Porter
 
 A cross-platform desktop application for importing media from camera SD cards to an external hard drive. Built for photographers and videographers who want automatic, rule-based file organisation with zero risk of data loss.
 

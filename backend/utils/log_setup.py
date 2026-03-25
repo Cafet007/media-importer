@@ -1,5 +1,5 @@
 """
-Logging setup for Media Mporter.
+Logging setup for Media Porter.
 
 Outputs:
   - File: ~/.media-mporter/logs/mporter.log  (rotating, 5 MB × 3 files)

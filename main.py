@@ -1,5 +1,5 @@
 """
-Media Mporter — entry point.
+Media Porter — entry point.
 Run: python3 main.py
 """
 
@@ -13,10 +13,10 @@ def main():
     setup_logging(level="DEBUG")
 
     import logging
-    logging.getLogger(__name__).info("Media Mporter starting up")
+    logging.getLogger(__name__).info("Media Porter starting up")
 
     app = QApplication(sys.argv)
-    app.setApplicationName("Media Mporter")
+    app.setApplicationName("Media Porter")
     app.setStyle("Fusion")
 
     # Dark palette

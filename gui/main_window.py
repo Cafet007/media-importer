@@ -56,7 +56,7 @@ class _Signals(QObject):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Media Mporter")
+        self.setWindowTitle("Media Porter")
         self.setMinimumSize(1100, 680)
 
         self._sig = _Signals()
@@ -135,7 +135,7 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(header)
         layout.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("Media Mporter")
+        title = QLabel("Media Porter")
         title.setFont(QFont("Arial", 16, QFont.Bold))
         title.setStyleSheet(f"color: {TEXT_PRIMARY};")
         layout.addWidget(title)
