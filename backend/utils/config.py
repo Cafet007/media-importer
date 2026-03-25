@@ -86,3 +86,15 @@ def save_rules(rules: dict) -> None:
     data = load()
     data["rules"] = {k: v for k, v in rules.items() if isinstance(v, str)}
     save(data)
+
+
+def get_dark_mode() -> bool:
+    """Return True if dark mode is enabled."""
+    return bool(load().get("ui", {}).get("dark_mode", False))
+
+
+def save_dark_mode(dark: bool) -> None:
+    """Persist dark mode preference."""
+    data = load()
+    data.setdefault("ui", {})["dark_mode"] = dark
+    save(data)

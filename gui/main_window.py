@@ -25,7 +25,7 @@ from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QFont
 
 from backend.utils.detector import DriveInfo
-from backend.utils.config import get_dest_paths, save_dest_paths, get_rules
+from backend.utils.config import get_dest_paths, save_dest_paths, get_rules, get_dark_mode, save_dark_mode
 from backend.core.scanner import scan_card
 from backend.core.inspector import inspect_all
 from backend.core.dedup import DedupChecker
@@ -33,11 +33,7 @@ from backend.core.importer import run_import
 from backend.core.rules import DestinationConfig
 from backend.core.safety import check_batch_space
 
-from gui.theme import (
-    BG_BASE, BG_BOTTOM, BG_PANEL, HEADER_STYLE, PANEL_TITLE_STYLE,
-    SPLITTER, DIVIDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    ACCENT, TAB_STYLE, btn_primary, btn_secondary, btn_danger,
-)
+from gui.theme import T
 from .widgets.source_panel import SourcePanel
 from .widgets.dest_panel import DestPanel
 from .widgets.file_table import FileTable
@@ -72,6 +68,7 @@ class MainWindow(QMainWindow):
         self._current_file: str | None = None
         self._importing = False
 
+        T.set_dark(get_dark_mode())
         self._build_ui()
         self._apply_theme()
         self._load_saved_config()
@@ -89,85 +86,67 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._build_header())
 
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.setHandleWidth(1)
-        splitter.setStyleSheet(f"QSplitter::handle {{ background: {SPLITTER}; }}")
+        self._splitter = QSplitter(Qt.Horizontal)
+        self._splitter.setHandleWidth(1)
 
         self._source_panel = SourcePanel()
         self._source_panel.drive_selected.connect(self._on_drive_selected)
-        splitter.addWidget(self._source_panel)
+        self._splitter.addWidget(self._source_panel)
 
-        # Center: tabbed Files / History
         self._tabs = QTabWidget()
-        self._tabs.setStyleSheet(TAB_STYLE)
         self._file_table = FileTable()
         self._history_panel = HistoryPanel()
         self._tabs.addTab(self._file_table,    "Files")
         self._tabs.addTab(self._history_panel, "History")
         self._tabs.currentChanged.connect(self._on_tab_changed)
-        splitter.addWidget(self._tabs)
+        self._splitter.addWidget(self._tabs)
 
         self._dest_panel = DestPanel()
         self._dest_panel.config_changed.connect(self._on_config_changed)
-        splitter.addWidget(self._dest_panel)
+        self._splitter.addWidget(self._dest_panel)
 
-        splitter.setSizes([280, 580, 280])
-        root.addWidget(splitter, stretch=1)
+        self._splitter.setSizes([280, 580, 280])
+        root.addWidget(self._splitter, stretch=1)
 
         root.addWidget(self._build_bottom_bar())
 
         self._status_bar = QStatusBar()
-        self._status_bar.setStyleSheet(
-            f"background: {BG_BOTTOM}; color: {TEXT_SECONDARY}; font-size: 11px;"
-            f" border-top: 1px solid {DIVIDER};"
-        )
         self.setStatusBar(self._status_bar)
         self._set_status("Ready — plug in your SD card")
 
     def _build_header(self) -> QWidget:
-        header = QWidget()
-        header.setFixedHeight(52)
-        header.setStyleSheet(
-            f"background: qlineargradient(x1:0,y1:0,x2:0,y2:1,"
-            f" stop:0 #f0f0f0, stop:1 #d8d8d8);"
-            f" border-bottom: 1px solid {DIVIDER};"
-        )
-        layout = QHBoxLayout(header)
+        self._header = QWidget()
+        self._header.setFixedHeight(52)
+        layout = QHBoxLayout(self._header)
         layout.setContentsMargins(20, 0, 20, 0)
 
-        title = QLabel("Media Porter")
-        title.setFont(QFont("Arial", 16, QFont.Bold))
-        title.setStyleSheet(f"color: {TEXT_PRIMARY};")
-        layout.addWidget(title)
+        self._app_title = QLabel("Media Porter")
+        self._app_title.setFont(QFont("Arial", 16, QFont.Bold))
+        layout.addWidget(self._app_title)
 
         layout.addStretch()
 
         self._header_status = QLabel("")
         self._header_status.setFont(QFont("Arial", 12))
-        self._header_status.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(self._header_status)
 
-        settings_btn = QPushButton("⚙  Settings")
-        settings_btn.setFixedHeight(32)
-        settings_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #f0f0f0, stop:1 #d8d8d8);
-                border: 1px solid #b0b0b0; border-radius: 6px;
-                color: #444; font-size: 12px; padding: 0 14px;
-            }}
-            QPushButton:hover {{ background: #e4e4e4; color: #111; border: 1px solid #999; }}
-        """)
-        settings_btn.clicked.connect(self._open_settings)
-        layout.addWidget(settings_btn)
+        self._theme_btn = QPushButton()
+        self._theme_btn.setFixedSize(32, 32)
+        self._theme_btn.setToolTip("Toggle dark / light mode")
+        self._theme_btn.clicked.connect(self._toggle_theme)
+        layout.addWidget(self._theme_btn)
 
-        return header
+        self._settings_btn = QPushButton("⚙  Settings")
+        self._settings_btn.setFixedHeight(32)
+        self._settings_btn.clicked.connect(self._open_settings)
+        layout.addWidget(self._settings_btn)
+
+        return self._header
 
     def _build_bottom_bar(self) -> QWidget:
-        bar = QWidget()
-        bar.setFixedHeight(76)
-        bar.setStyleSheet(f"background: {BG_BOTTOM}; border-top: 1px solid {DIVIDER};")
-        layout = QHBoxLayout(bar)
+        self._bottom_bar = QWidget()
+        self._bottom_bar.setFixedHeight(76)
+        layout = QHBoxLayout(self._bottom_bar)
         layout.setContentsMargins(16, 0, 16, 0)
         layout.setSpacing(12)
 
@@ -176,7 +155,6 @@ class MainWindow(QMainWindow):
         self._scan_btn.setFixedWidth(130)
         self._scan_btn.setEnabled(False)
         self._scan_btn.clicked.connect(self._do_scan)
-        self._scan_btn.setStyleSheet(btn_secondary(h=40))
         layout.addWidget(self._scan_btn)
 
         progress_col = QWidget()
@@ -189,18 +167,6 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._progress.setFixedHeight(8)
         self._progress.setTextVisible(False)
-        self._progress.setStyleSheet(f"""
-            QProgressBar {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #d0d0d0, stop:1 #c0c0c0);
-                border: 1px solid #b0b0b0; border-radius: 4px;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #60a0f0, stop:1 #3468c0);
-                border-radius: 4px;
-            }}
-        """)
         progress_layout.addWidget(self._progress)
 
         self._file_progress = QProgressBar()
@@ -209,16 +175,6 @@ class MainWindow(QMainWindow):
         self._file_progress.setFixedHeight(4)
         self._file_progress.setTextVisible(False)
         self._file_progress.setVisible(False)
-        self._file_progress.setStyleSheet(f"""
-            QProgressBar {{
-                background: #c8c8c8; border-radius: 2px; border: none;
-            }}
-            QProgressBar::chunk {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #50c878, stop:1 #2e9e5a);
-                border-radius: 2px;
-            }}
-        """)
         progress_layout.addWidget(self._file_progress)
 
         layout.addWidget(progress_col, stretch=1)
@@ -228,7 +184,6 @@ class MainWindow(QMainWindow):
         self._import_btn.setFixedWidth(180)
         self._import_btn.setEnabled(False)
         self._import_btn.clicked.connect(self._do_import)
-        self._import_btn.setStyleSheet(btn_primary(h=40))
         layout.addWidget(self._import_btn)
 
         self._cancel_btn = QPushButton("✕  Cancel")
@@ -236,24 +191,55 @@ class MainWindow(QMainWindow):
         self._cancel_btn.setFixedWidth(110)
         self._cancel_btn.setVisible(False)
         self._cancel_btn.clicked.connect(self._do_cancel)
-        self._cancel_btn.setStyleSheet(btn_danger(h=40))
         layout.addWidget(self._cancel_btn)
 
-        return bar
+        return self._bottom_bar
 
-    def _btn_style(self, bg, hover_bg, text_color="#ccc") -> str:
-        return f"""
-            QPushButton {{
-                background: {bg}; border: none; border-radius: 8px;
-                color: {text_color}; font-size: 13px; font-weight: bold;
-                padding: 0 16px;
-            }}
-            QPushButton:hover {{ background: {hover_bg}; }}
-            QPushButton:disabled {{ background: #222; color: #555; }}
-        """
+    def _toggle_theme(self):
+        T.set_dark(not T.dark)
+        save_dark_mode(T.dark)
+        self._apply_theme()
 
     def _apply_theme(self):
-        self.setStyleSheet(f"QMainWindow {{ background: {BG_BASE}; }}")
+        self.setStyleSheet(f"QMainWindow {{ background: {T.BG_BASE}; }}")
+
+        # Header
+        self._header.setStyleSheet(T.HEADER_STYLE)
+        self._app_title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        self._header_status.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._theme_btn.setText("☀" if T.dark else "🌙")
+        self._theme_btn.setStyleSheet(T.btn_secondary(h=32))
+        self._settings_btn.setStyleSheet(T.btn_secondary(h=32))
+
+        # Splitter
+        self._splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {T.SPLITTER}; }}"
+        )
+
+        # Tabs
+        self._tabs.setStyleSheet(T.TAB_STYLE)
+
+        # Bottom bar
+        self._bottom_bar.setStyleSheet(
+            f"background: {T.BG_BOTTOM}; border-top: 1px solid {T.DIVIDER};"
+        )
+        self._scan_btn.setStyleSheet(T.btn_secondary(h=40))
+        self._import_btn.setStyleSheet(T.btn_primary(h=40))
+        self._cancel_btn.setStyleSheet(T.btn_danger(h=40))
+        self._progress.setStyleSheet(T.PROGRESS_STYLE)
+        self._file_progress.setStyleSheet(T.FILE_PROGRESS_STYLE)
+
+        # Status bar
+        self._status_bar.setStyleSheet(
+            f"background: {T.BG_BOTTOM}; color: {T.TEXT_SECONDARY}; font-size: 11px;"
+            f" border-top: 1px solid {T.DIVIDER};"
+        )
+
+        # Child panels
+        self._source_panel.apply_theme()
+        self._dest_panel.apply_theme()
+        self._file_table.apply_theme()
+        self._history_panel.apply_theme()
 
     # ------------------------------------------------------------------
     # Event handlers

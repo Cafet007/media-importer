@@ -14,11 +14,7 @@ from PySide6.QtCore import Signal, Qt, QTimer
 from PySide6.QtGui import QFont
 
 from backend.utils.detector import list_drives, DriveInfo
-from gui.theme import (
-    BG_PANEL, BG_CARD, BG_CARD_SEL, BORDER_CARD, BORDER_CARD_SEL,
-    DIVIDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    HEADER_STYLE, PANEL_TITLE_STYLE, btn_secondary,
-)
+from gui.theme import T
 
 logger = logging.getLogger(__name__)
 
@@ -47,50 +43,58 @@ class DriveCard(QFrame):
         text = QVBoxLayout()
         text.setSpacing(2)
 
-        name = QLabel(self.drive.label)
-        name.setFont(QFont("Arial", 13, QFont.Bold))
-        name.setStyleSheet(f"color: {TEXT_PRIMARY};")
+        self._name_lbl = QLabel(self.drive.label)
+        self._name_lbl.setFont(QFont("Arial", 13, QFont.Bold))
 
         kind = "SD Card" if self.drive.is_camera_card else "External Drive"
-        detail = QLabel(f"{kind}  ·  {self.drive.total_gb} GB  ·  {self.drive.filesystem}")
-        detail.setFont(QFont("Arial", 11))
-        detail.setStyleSheet(f"color: {TEXT_SECONDARY};")
+        self._detail_lbl = QLabel(f"{kind}  ·  {self.drive.total_gb} GB  ·  {self.drive.filesystem}")
+        self._detail_lbl.setFont(QFont("Arial", 11))
 
-        text.addWidget(name)
-        text.addWidget(detail)
+        text.addWidget(self._name_lbl)
+        text.addWidget(self._detail_lbl)
         layout.addLayout(text)
         layout.addStretch()
 
-        free = QLabel(f"{self.drive.free_gb} GB\nfree")
-        free.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        free.setFont(QFont("Arial", 11))
-        free.setStyleSheet(f"color: {TEXT_MUTED};")
-        layout.addWidget(free)
+        self._free_lbl = QLabel(f"{self.drive.free_gb} GB\nfree")
+        self._free_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._free_lbl.setFont(QFont("Arial", 11))
+        layout.addWidget(self._free_lbl)
+
+        self._refresh_labels()
+
+    def _refresh_labels(self):
+        self._name_lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
+        self._detail_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._free_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
 
     def set_selected(self, selected: bool):
         self._selected = selected
         self._apply_style(selected)
 
     def _apply_style(self, selected: bool):
+        self._refresh_labels()
         if selected:
             self.setStyleSheet(f"""
                 DriveCard {{
-                    background: {BG_CARD_SEL};
-                    border: 2px solid {BORDER_CARD_SEL};
+                    background: {T.BG_CARD_SEL};
+                    border: 2px solid {T.BORDER_CARD_SEL};
                     border-radius: 10px;
                 }}
             """)
         else:
+            hover_bg = "qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #48484a, stop:1 #3a3a3c)" \
+                if T.dark else \
+                "qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #fafafa, stop:1 #eeeeee)"
+            hover_border = "#606062" if T.dark else "#aaaaaa"
             self.setStyleSheet(f"""
                 DriveCard {{
-                    background: {BG_CARD};
-                    border: 1px solid {BORDER_CARD};
+                    background: {T.BG_CARD};
+                    border: 1px solid {T.BORDER_CARD};
                     border-radius: 10px;
                 }}
                 DriveCard:hover {{
-                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                        stop:0 #fafafa, stop:1 #eeeeee);
-                    border: 1px solid #aaaaaa;
+                    background: {hover_bg};
+                    border: 1px solid {hover_border};
                 }}
             """)
 
@@ -101,14 +105,14 @@ class DriveCard(QFrame):
 def _section_label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setFont(QFont("Arial", 10, QFont.Bold))
-    lbl.setStyleSheet(f"color: {TEXT_MUTED}; letter-spacing: 1px; padding: 8px 0 4px 0;")
+    lbl.setStyleSheet(f"color: {T.TEXT_MUTED}; letter-spacing: 1px; padding: 8px 0 4px 0;")
     return lbl
 
 
 def _empty_label(text: str) -> QLabel:
     lbl = QLabel(text)
     lbl.setAlignment(Qt.AlignCenter)
-    lbl.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px; padding: 8px 0;")
+    lbl.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 12px; padding: 8px 0;")
     lbl.setWordWrap(True)
     return lbl
 
@@ -132,48 +136,66 @@ class SourcePanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        header = QWidget()
-        header.setFixedHeight(52)
-        header.setStyleSheet(HEADER_STYLE)
-        h_layout = QHBoxLayout(header)
+        self._header_widget = QWidget()
+        self._header_widget.setFixedHeight(52)
+        h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 12, 0)
 
-        title = QLabel("DRIVES")
-        title.setFont(QFont("Arial", 11, QFont.Bold))
-        title.setStyleSheet(PANEL_TITLE_STYLE)
-        h_layout.addWidget(title)
+        self._title_lbl = QLabel("DRIVES")
+        self._title_lbl.setFont(QFont("Arial", 11, QFont.Bold))
+        h_layout.addWidget(self._title_lbl)
         h_layout.addStretch()
 
-        refresh_btn = QPushButton("⟳")
-        refresh_btn.setFixedSize(28, 28)
-        refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #f0f0f0, stop:1 #d8d8d8);
-                border: 1px solid #b0b0b0; border-radius: 14px;
-                color: #555; font-size: 16px;
-            }}
-            QPushButton:hover {{ background: #e8e8e8; color: #222; }}
-        """)
-        refresh_btn.clicked.connect(self.refresh)
-        h_layout.addWidget(refresh_btn)
-        root.addWidget(header)
+        self._refresh_btn = QPushButton("⟳")
+        self._refresh_btn.setFixedSize(28, 28)
+        self._refresh_btn.clicked.connect(self.refresh)
+        h_layout.addWidget(self._refresh_btn)
+        root.addWidget(self._header_widget)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setStyleSheet(f"QScrollArea {{ background: {BG_PANEL}; border: none; }}")
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
 
-        body = QWidget()
-        body.setStyleSheet(f"background: {BG_PANEL};")
-        self._body_layout = QVBoxLayout(body)
+        self._body = QWidget()
+        self._body_layout = QVBoxLayout(self._body)
         self._body_layout.setContentsMargins(12, 8, 12, 12)
         self._body_layout.setSpacing(0)
         self._body_layout.addStretch()
 
-        scroll.setWidget(body)
-        root.addWidget(scroll, stretch=1)
+        self._scroll.setWidget(self._body)
+        root.addWidget(self._scroll, stretch=1)
 
+        self.apply_theme()
+        self.refresh()
+
+    def apply_theme(self):
+        self._header_widget.setStyleSheet(T.HEADER_STYLE)
+        self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
+        if T.dark:
+            self._refresh_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 #3a3a3c, stop:1 #2c2c2e);
+                    border: 1px solid #48484a; border-radius: 14px;
+                    color: #f0f0f0; font-size: 16px;
+                }
+                QPushButton:hover { background: #48484a; }
+            """)
+        else:
+            self._refresh_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 #f0f0f0, stop:1 #d8d8d8);
+                    border: 1px solid #b0b0b0; border-radius: 14px;
+                    color: #555; font-size: 16px;
+                }
+                QPushButton:hover { background: #e8e8e8; color: #222; }
+            """)
+        self._scroll.setStyleSheet(
+            f"QScrollArea {{ background: {T.BG_PANEL}; border: none; }}"
+        )
+        self._body.setStyleSheet(f"background: {T.BG_PANEL};")
+        # Recreate cards with new theme
         self.refresh()
 
     def refresh(self):
@@ -198,7 +220,7 @@ class SourcePanel(QWidget):
 
         div = QFrame()
         div.setFrameShape(QFrame.HLine)
-        div.setStyleSheet(f"color: {DIVIDER}; margin: 8px 0;")
+        div.setStyleSheet(f"color: {T.DIVIDER}; margin: 8px 0;")
         self._body_layout.insertWidget(idx, div); idx += 1
 
         self._body_layout.insertWidget(idx, _section_label("STORAGE DRIVES")); idx += 1

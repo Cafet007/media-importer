@@ -11,10 +11,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor
 
-from gui.theme import (
-    TABLE_STYLE, HEADER_STYLE, PANEL_TITLE_STYLE,
-    TEXT_PRIMARY, btn_secondary,
-)
+from gui.theme import T
 
 
 class HistoryPanel(QWidget):
@@ -27,32 +24,21 @@ class HistoryPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header = QWidget()
-        header.setFixedHeight(52)
-        header.setStyleSheet(HEADER_STYLE)
-        h_layout = QHBoxLayout(header)
+        self._header_widget = QWidget()
+        self._header_widget.setFixedHeight(52)
+        h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 16, 0)
 
-        title = QLabel("IMPORT HISTORY")
-        title.setFont(QFont("Arial", 11, QFont.Bold))
-        title.setStyleSheet(PANEL_TITLE_STYLE)
-        h_layout.addWidget(title)
+        self._title_lbl = QLabel("IMPORT HISTORY")
+        self._title_lbl.setFont(QFont("Arial", 11, QFont.Bold))
+        h_layout.addWidget(self._title_lbl)
         h_layout.addStretch()
 
-        refresh_btn = QPushButton("Refresh")
-        refresh_btn.setFixedHeight(28)
-        refresh_btn.setStyleSheet(f"""
-            QPushButton {{
-                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
-                    stop:0 #f0f0f0, stop:1 #d8d8d8);
-                border: 1px solid #b0b0b0; border-radius: 5px;
-                color: #444; font-size: 11px; padding: 0 10px;
-            }}
-            QPushButton:hover {{ background: #e0e0e0; color: #111; }}
-        """)
-        refresh_btn.clicked.connect(self.load)
-        h_layout.addWidget(refresh_btn)
-        layout.addWidget(header)
+        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn.setFixedHeight(28)
+        self._refresh_btn.clicked.connect(self.load)
+        h_layout.addWidget(self._refresh_btn)
+        layout.addWidget(self._header_widget)
 
         self._table = QTableWidget()
         self._table.setColumnCount(6)
@@ -69,8 +55,34 @@ class HistoryPanel(QWidget):
         self._table.setAlternatingRowColors(True)
         self._table.setShowGrid(False)
         self._table.setSortingEnabled(True)
-        self._table.setStyleSheet(TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
+
+        self.apply_theme()
+
+    def apply_theme(self):
+        self._header_widget.setStyleSheet(T.HEADER_STYLE)
+        self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
+        self._table.setStyleSheet(T.TABLE_STYLE)
+        if T.dark:
+            self._refresh_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 #3a3a3c, stop:1 #2c2c2e);
+                    border: 1px solid #48484a; border-radius: 5px;
+                    color: #f0f0f0; font-size: 11px; padding: 0 10px;
+                }
+                QPushButton:hover { background: #48484a; }
+            """)
+        else:
+            self._refresh_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                        stop:0 #f0f0f0, stop:1 #d8d8d8);
+                    border: 1px solid #b0b0b0; border-radius: 5px;
+                    color: #444; font-size: 11px; padding: 0 10px;
+                }
+                QPushButton:hover { background: #e0e0e0; color: #111; }
+            """)
 
     def load(self):
         try:
@@ -93,7 +105,7 @@ class HistoryPanel(QWidget):
 
             for col, text in enumerate([filename, media_type, camera, captured, imported, dest]):
                 item = QTableWidgetItem(text)
-                item.setForeground(QColor(TEXT_PRIMARY))
+                item.setForeground(QColor(T.TEXT_PRIMARY))
                 self._table.setItem(row, col, item)
 
             self._table.setRowHeight(row, 28)

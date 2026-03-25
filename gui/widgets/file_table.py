@@ -11,11 +11,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor
 
 from backend.core.models import MediaFile, MediaType
-from gui.theme import (
-    TABLE_STYLE, HEADER_STYLE, PANEL_TITLE_STYLE,
-    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
-    ACCENT, SUCCESS, DANGER, CONFLICT, WARNING,
-)
+from gui.theme import T
 
 
 _KIND_ICON = {
@@ -23,12 +19,6 @@ _KIND_ICON = {
     MediaType.PHOTO:   "🟢 JPG",
     MediaType.VIDEO:   "🔵 Video",
     MediaType.UNKNOWN: "⚪ ?",
-}
-
-_STATUS_COLOR = {
-    "new":      ACCENT,
-    "imported": TEXT_MUTED,
-    "failed":   DANGER,
 }
 
 
@@ -56,23 +46,20 @@ class FileTable(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        header = QWidget()
-        header.setFixedHeight(52)
-        header.setStyleSheet(HEADER_STYLE)
-        h_layout = QHBoxLayout(header)
+        self._header_widget = QWidget()
+        self._header_widget.setFixedHeight(52)
+        h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 16, 0)
 
         self._title = QLabel("FILES")
         self._title.setFont(QFont("Arial", 11, QFont.Bold))
-        self._title.setStyleSheet(PANEL_TITLE_STYLE)
         h_layout.addWidget(self._title)
         h_layout.addStretch()
 
         self._summary = QLabel("")
         self._summary.setFont(QFont("Arial", 11))
-        self._summary.setStyleSheet(f"color: {TEXT_SECONDARY};")
         h_layout.addWidget(self._summary)
-        layout.addWidget(header)
+        layout.addWidget(self._header_widget)
 
         self._table = QTableWidget()
         self._table.setColumnCount(5)
@@ -90,8 +77,15 @@ class FileTable(QWidget):
         self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setSortIndicatorShown(True)
         self._table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self._table.setStyleSheet(TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
+
+        self.apply_theme()
+
+    def apply_theme(self):
+        self._header_widget.setStyleSheet(T.HEADER_STYLE)
+        self._title.setStyleSheet(T.PANEL_TITLE_STYLE)
+        self._summary.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
+        self._table.setStyleSheet(T.TABLE_STYLE)
 
     def load(self, files: list[MediaFile], new_set: set[str] | None = None):
         self._table.setSortingEnabled(False)
@@ -113,6 +107,8 @@ class FileTable(QWidget):
             size_str  = f"{f.size_mb:.1f} MB"
             status_str = "New" if is_new else "Already imported"
 
+            status_color = QColor(T.ACCENT if status == "new" else T.TEXT_MUTED)
+
             items = [
                 QTableWidgetItem(f.name),
                 QTableWidgetItem(kind_str),
@@ -121,9 +117,8 @@ class FileTable(QWidget):
                 QTableWidgetItem(status_str),
             ]
 
-            status_color = QColor(_STATUS_COLOR.get(status, TEXT_PRIMARY))
             for col, item in enumerate(items):
-                item.setForeground(status_color if col == 4 else QColor(TEXT_PRIMARY))
+                item.setForeground(status_color if col == 4 else QColor(T.TEXT_PRIMARY))
                 self._table.setItem(row, col, item)
 
             self._table.setRowHeight(row, 28)
@@ -145,20 +140,20 @@ class FileTable(QWidget):
                 break
 
     def mark_in_progress(self, filename: str):
-        self._update_status(filename, "In Progress...", WARNING)
+        self._update_status(filename, "In Progress...", T.WARNING)
         for row in range(self._table.rowCount()):
             if self._table.item(row, 0) and self._table.item(row, 0).text() == filename:
                 self._table.scrollToItem(self._table.item(row, 4))
                 break
 
     def mark_copied(self, filename: str):
-        self._update_status(filename, "Copied ✓", SUCCESS)
+        self._update_status(filename, "Copied ✓", T.SUCCESS)
 
     def mark_conflict(self, filename: str):
-        self._update_status(filename, "Conflict ⚠", CONFLICT)
+        self._update_status(filename, "Conflict ⚠", T.CONFLICT)
 
     def mark_failed(self, filename: str):
-        self._update_status(filename, "Failed ✗", DANGER)
+        self._update_status(filename, "Failed ✗", T.DANGER)
 
     def clear(self):
         self._table.setRowCount(0)
