@@ -11,6 +11,11 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QColor
 
 from backend.core.models import MediaFile, MediaType
+from gui.theme import (
+    TABLE_STYLE, HEADER_STYLE, PANEL_TITLE_STYLE,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    ACCENT, SUCCESS, DANGER, CONFLICT, WARNING,
+)
 
 
 _KIND_ICON = {
@@ -21,14 +26,13 @@ _KIND_ICON = {
 }
 
 _STATUS_COLOR = {
-    "new":      "#4a9eff",
-    "imported": "#555",
-    "failed":   "#e74c3c",
+    "new":      ACCENT,
+    "imported": TEXT_MUTED,
+    "failed":   DANGER,
 }
 
 
 class _SortableItem(QTableWidgetItem):
-    """QTableWidgetItem with an optional numeric/typed sort key."""
     def __init__(self, text: str, sort_key=None):
         super().__init__(text)
         self._sort_key = sort_key if sort_key is not None else text
@@ -43,8 +47,6 @@ class _SortableItem(QTableWidgetItem):
 
 
 class FileTable(QWidget):
-    """Displays scanned files with new/already-imported status."""
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build()
@@ -54,26 +56,24 @@ class FileTable(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header bar
         header = QWidget()
         header.setFixedHeight(52)
-        header.setStyleSheet("background: #1a1a1a; border-bottom: 1px solid #333;")
+        header.setStyleSheet(HEADER_STYLE)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(16, 0, 16, 0)
 
         self._title = QLabel("FILES")
         self._title.setFont(QFont("Arial", 11, QFont.Bold))
-        self._title.setStyleSheet("color: #888; letter-spacing: 1px;")
+        self._title.setStyleSheet(PANEL_TITLE_STYLE)
         h_layout.addWidget(self._title)
         h_layout.addStretch()
 
         self._summary = QLabel("")
         self._summary.setFont(QFont("Arial", 11))
-        self._summary.setStyleSheet("color: #666;")
+        self._summary.setStyleSheet(f"color: {TEXT_SECONDARY};")
         h_layout.addWidget(self._summary)
         layout.addWidget(header)
 
-        # Table
         self._table = QTableWidget()
         self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(["File", "Kind", "Date", "Size", "Status"])
@@ -90,39 +90,10 @@ class FileTable(QWidget):
         self._table.setSortingEnabled(True)
         self._table.horizontalHeader().setSortIndicatorShown(True)
         self._table.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)
-        self._table.setStyleSheet("""
-            QTableWidget {
-                background: #1e1e1e;
-                alternate-background-color: #222;
-                color: #ddd;
-                font-size: 12px;
-                border: none;
-            }
-            QHeaderView::section {
-                background: #252525;
-                color: #888;
-                font-size: 11px;
-                font-weight: bold;
-                padding: 6px 8px;
-                border: none;
-                border-bottom: 1px solid #333;
-                text-transform: uppercase;
-                cursor: pointer;
-            }
-            QHeaderView::section:hover { background: #2e2e2e; color: #bbb; }
-            QHeaderView::section:pressed { background: #333; }
-            QHeaderView::down-arrow { image: none; width: 0; }
-            QHeaderView::up-arrow   { image: none; width: 0; }
-            QTableWidget::item { padding: 4px 8px; }
-            QTableWidget::item:selected { background: #1e3a5f; }
-        """)
+        self._table.setStyleSheet(TABLE_STYLE)
         layout.addWidget(self._table, stretch=1)
 
     def load(self, files: list[MediaFile], new_set: set[str] | None = None):
-        """
-        Populate table with files.
-        new_set: set of filenames that are new (not yet imported).
-        """
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(files))
 
@@ -138,8 +109,8 @@ class FileTable(QWidget):
 
             date_str = f.captured_at.strftime("%Y-%m-%d  %H:%M") if f.captured_at else "—"
             date_key = f.captured_at.timestamp() if f.captured_at else 0.0
-            kind_str = _KIND_ICON.get(f.media_type, "?")
-            size_str = f"{f.size_mb:.1f} MB"
+            kind_str  = _KIND_ICON.get(f.media_type, "?")
+            size_str  = f"{f.size_mb:.1f} MB"
             status_str = "New" if is_new else "Already imported"
 
             items = [
@@ -150,9 +121,9 @@ class FileTable(QWidget):
                 QTableWidgetItem(status_str),
             ]
 
-            color = QColor(_STATUS_COLOR.get(status, "#ddd"))
+            status_color = QColor(_STATUS_COLOR.get(status, TEXT_PRIMARY))
             for col, item in enumerate(items):
-                item.setForeground(color if col == 4 else QColor("#ddd"))
+                item.setForeground(status_color if col == 4 else QColor(TEXT_PRIMARY))
                 self._table.setItem(row, col, item)
 
             self._table.setRowHeight(row, 28)
@@ -165,32 +136,29 @@ class FileTable(QWidget):
             f"New: {new_count}   Already imported: {skipped_count}"
         )
 
-    def mark_in_progress(self, filename: str):
-        """Update a row's status to 'In Progress...' while copying."""
+    def _update_status(self, filename: str, text: str, color: str):
         for row in range(self._table.rowCount()):
-            if self._table.item(row, 0).text() == filename:
-                item = QTableWidgetItem("In Progress...")
-                item.setForeground(QColor("#f39c12"))
+            if self._table.item(row, 0) and self._table.item(row, 0).text() == filename:
+                item = QTableWidgetItem(text)
+                item.setForeground(QColor(color))
                 self._table.setItem(row, 4, item)
-                self._table.scrollToItem(item)
+                break
+
+    def mark_in_progress(self, filename: str):
+        self._update_status(filename, "In Progress...", WARNING)
+        for row in range(self._table.rowCount()):
+            if self._table.item(row, 0) and self._table.item(row, 0).text() == filename:
+                self._table.scrollToItem(self._table.item(row, 4))
                 break
 
     def mark_copied(self, filename: str):
-        """Update a row's status to 'Copied ✓' after import."""
-        for row in range(self._table.rowCount()):
-            if self._table.item(row, 0).text() == filename:
-                item = QTableWidgetItem("Copied ✓")
-                item.setForeground(QColor("#2ecc71"))
-                self._table.setItem(row, 4, item)
-                break
+        self._update_status(filename, "Copied ✓", SUCCESS)
+
+    def mark_conflict(self, filename: str):
+        self._update_status(filename, "Conflict ⚠", CONFLICT)
 
     def mark_failed(self, filename: str):
-        for row in range(self._table.rowCount()):
-            if self._table.item(row, 0).text() == filename:
-                item = QTableWidgetItem("Failed ✗")
-                item.setForeground(QColor("#e74c3c"))
-                self._table.setItem(row, 4, item)
-                break
+        self._update_status(filename, "Failed ✗", DANGER)
 
     def clear(self):
         self._table.setRowCount(0)

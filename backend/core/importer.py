@@ -29,9 +29,10 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class ImportResult:
-    copied:   list[tuple[MediaFile, Path]] = field(default_factory=list)
-    skipped:  list[MediaFile]              = field(default_factory=list)  # already exists
-    failed:   list[tuple[MediaFile, str]]  = field(default_factory=list)  # error message
+    copied:    list[tuple[MediaFile, Path]] = field(default_factory=list)
+    skipped:   list[MediaFile]              = field(default_factory=list)  # already exists (dedup)
+    conflicts: list[MediaFile]              = field(default_factory=list)  # dest path exists
+    failed:    list[tuple[MediaFile, str]]  = field(default_factory=list)  # copy error
 
     @property
     def total_copied(self) -> int:
@@ -45,13 +46,19 @@ class ImportResult:
     def total_failed(self) -> int:
         return len(self.failed)
 
+    @property
+    def total_conflicts(self) -> int:
+        return len(self.conflicts)
+
     def summary(self) -> str:
         mb = sum(f.size_mb for f, _ in self.copied)
-        return (
-            f"Copied {self.total_copied} files ({mb:.1f} MB)  |  "
-            f"Skipped {self.total_skipped} (already imported)  |  "
-            f"Failed {self.total_failed}"
-        )
+        parts = [f"Copied {self.total_copied} files ({mb:.1f} MB)",
+                 f"Skipped {self.total_skipped}"]
+        if self.total_conflicts:
+            parts.append(f"Conflicts {self.total_conflicts}")
+        if self.total_failed:
+            parts.append(f"Failed {self.total_failed}")
+        return "  |  ".join(parts)
 
 
 def run_import(
@@ -123,8 +130,13 @@ def run_import(
             record_import(file, copied_to)
             logger.debug("Copied [%d/%d] %s → %s", i, total, file.name, copied_to)
         except SafetyError as e:
-            logger.error("Safety blocked [%d/%d] %s — %s", i, total, file.name, e)
-            result.failed.append((file, str(e)))
+            err = str(e)
+            if "DESTINATION EXISTS" in err:
+                logger.warning("Conflict [%d/%d] %s — dest already exists", i, total, file.name)
+                result.conflicts.append(file)
+            else:
+                logger.error("Safety blocked [%d/%d] %s — %s", i, total, file.name, err)
+                result.failed.append((file, err))
         except Exception as e:
             logger.error("Copy failed [%d/%d] %s — %s", i, total, file.name, e)
             result.failed.append((file, str(e)))

@@ -71,3 +71,18 @@ def save_dest_paths(photo_base: Path | str, video_base: Path | str) -> None:
     data["paths"]["photo_base"] = str(photo_base)
     data["paths"]["video_base"] = str(video_base)
     save(data)
+
+
+def get_rules() -> dict:
+    """Return rule templates from config, falling back to defaults for missing keys."""
+    from backend.core.rules import DEFAULT_TEMPLATES
+    data = load()
+    saved = data.get("rules", {})
+    return {**DEFAULT_TEMPLATES, **saved}
+
+
+def save_rules(rules: dict) -> None:
+    """Persist rule templates to config."""
+    data = load()
+    data["rules"] = {k: v for k, v in rules.items() if isinstance(v, str)}
+    save(data)

@@ -13,14 +13,16 @@ from PySide6.QtGui import QFont
 from pathlib import Path
 
 from backend.core.rules import DestinationConfig
+from gui.theme import (
+    BG_PANEL, HEADER_STYLE, PANEL_TITLE_STYLE, INPUT_STYLE,
+    DIVIDER, TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class PathRow(QWidget):
-    """A labeled path picker row."""
-
-    changed = Signal(str)  # emits new path string
+    changed = Signal(str)
 
     def __init__(self, label: str, icon: str, default: str = "", parent=None):
         super().__init__(parent)
@@ -31,27 +33,24 @@ class PathRow(QWidget):
         lbl = QLabel(f"{icon}  {label}")
         lbl.setFixedWidth(80)
         lbl.setFont(QFont("Arial", 12))
-        lbl.setStyleSheet("color: #aaa;")
+        lbl.setStyleSheet(f"color: {TEXT_SECONDARY};")
         layout.addWidget(lbl)
 
         self._edit = QLineEdit(default)
-        self._edit.setStyleSheet("""
-            QLineEdit {
-                background: #2a2a2a; border: 1px solid #3a3a3a;
-                border-radius: 6px; padding: 6px 10px;
-                color: #eee; font-size: 12px;
-            }
-            QLineEdit:focus { border: 1px solid #4a9eff; }
-        """)
+        self._edit.setStyleSheet(INPUT_STYLE)
         self._edit.textChanged.connect(self.changed)
         layout.addWidget(self._edit, stretch=1)
 
         browse = QPushButton("…")
         browse.setFixedSize(32, 32)
-        browse.setStyleSheet("""
-            QPushButton { background: #333; border: none; border-radius: 6px;
-                          color: #aaa; font-size: 16px; }
-            QPushButton:hover { background: #444; color: white; }
+        browse.setStyleSheet(f"""
+            QPushButton {{
+                background: qlineargradient(x1:0,y1:0,x2:0,y2:1,
+                    stop:0 #f0f0f0, stop:1 #d8d8d8);
+                border: 1px solid #b0b0b0; border-radius: 6px;
+                color: #555; font-size: 16px;
+            }}
+            QPushButton:hover {{ background: #e0e0e0; color: #111; }}
         """)
         browse.clicked.connect(self._browse)
         layout.addWidget(browse)
@@ -69,11 +68,7 @@ class PathRow(QWidget):
 
 
 class DestPanel(QWidget):
-    """
-    Right-side panel for configuring destination folders.
-    """
-
-    config_changed = Signal(object)  # emits DestinationConfig
+    config_changed = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,29 +81,26 @@ class DestPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header
         header = QWidget()
         header.setFixedHeight(52)
-        header.setStyleSheet("background: #1a1a1a; border-bottom: 1px solid #333;")
+        header.setStyleSheet(HEADER_STYLE)
         h_layout = QHBoxLayout(header)
         h_layout.setContentsMargins(16, 0, 16, 0)
         title = QLabel("DESTINATION")
         title.setFont(QFont("Arial", 11, QFont.Bold))
-        title.setStyleSheet("color: #888; letter-spacing: 1px;")
+        title.setStyleSheet(PANEL_TITLE_STYLE)
         h_layout.addWidget(title)
         layout.addWidget(header)
 
-        # Body
         body = QWidget()
-        body.setStyleSheet("background: #1a1a1a;")
+        body.setStyleSheet(f"background: {BG_PANEL};")
         body_layout = QVBoxLayout(body)
         body_layout.setContentsMargins(16, 16, 16, 16)
         body_layout.setSpacing(16)
 
-        # External drive root (auto-filled when drive selected)
         drive_label = QLabel("External Drive")
         drive_label.setFont(QFont("Arial", 11, QFont.Bold))
-        drive_label.setStyleSheet("color: #ccc;")
+        drive_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         body_layout.addWidget(drive_label)
 
         self._photo_row = PathRow("Photos", "📷")
@@ -119,21 +111,19 @@ class DestPanel(QWidget):
         self._video_row.changed.connect(self._emit_config)
         body_layout.addWidget(self._video_row)
 
-        # Divider
         div = QFrame()
         div.setFrameShape(QFrame.HLine)
-        div.setStyleSheet("color: #333;")
+        div.setStyleSheet(f"color: {DIVIDER};")
         body_layout.addWidget(div)
 
-        # Structure preview
         preview_label = QLabel("Folder structure:")
         preview_label.setFont(QFont("Arial", 11, QFont.Bold))
-        preview_label.setStyleSheet("color: #ccc;")
+        preview_label.setStyleSheet(f"color: {TEXT_PRIMARY};")
         body_layout.addWidget(preview_label)
 
         self._preview = QLabel(self._structure_text())
         self._preview.setFont(QFont("Menlo, Courier", 11))
-        self._preview.setStyleSheet("color: #666; line-height: 1.6;")
+        self._preview.setStyleSheet(f"color: {TEXT_MUTED}; line-height: 1.6;")
         self._preview.setWordWrap(True)
         body_layout.addWidget(self._preview)
 
@@ -152,13 +142,11 @@ class DestPanel(QWidget):
         )
 
     def set_paths(self, photo: str, video: str):
-        """Restore saved paths directly (e.g. from config file)."""
         self._photo_row.set_path(photo)
         self._video_row.set_path(video)
         self._emit_config()
 
     def set_drive_root(self, root: Path):
-        """Auto-fill paths when user selects an external drive."""
         logger.info("Destination auto-filled from drive root: %s", root)
         self._photo_row.set_path(str(root / "Photography"))
         self._video_row.set_path(str(root / "Footage"))
