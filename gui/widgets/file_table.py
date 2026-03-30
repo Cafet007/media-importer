@@ -47,6 +47,7 @@ class FileTable(QWidget):
         layout.setSpacing(0)
 
         self._header_widget = QWidget()
+        self._header_widget.setObjectName("panelHeader")
         self._header_widget.setFixedHeight(52)
         h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 16, 0)

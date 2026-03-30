@@ -97,10 +97,11 @@ class Theme:
     @property
     def HEADER_STYLE(self) -> str:
         return f"""
-            QWidget {{
+            #panelHeader {{
                 background: {self.BG_HEADER};
                 border-bottom: 1px solid {self.DIVIDER};
             }}
+            #panelHeader QLabel {{ background: transparent; border: none; }}
         """
 
     @property
@@ -157,7 +158,7 @@ class Theme:
     @property
     def TAB_STYLE(self) -> str:
         return f"""
-            QTabWidget::pane {{ border: none; background: {self.BG_TABLE}; }}
+            QTabWidget::pane {{ border: none; background: {self.BG_PANEL}; }}
             QTabBar::tab {{
                 background: {self.BG_HEADER};
                 color: {self.TEXT_MUTED};

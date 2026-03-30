@@ -6,7 +6,7 @@ Roles:
   MEDIA_DEST       — External hard drive to import TO
   IGNORED          — User explicitly dismissed this drive
 
-Storage: ~/.media-mporter/drives.json
+Storage: ~/.media-porter/drives.json
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-REGISTRY_PATH = Path.home() / ".media-mporter" / "drives.json"
+REGISTRY_PATH = Path.home() / ".media-porter" / "drives.json"
 
 
 class DriveRole(str, Enum):

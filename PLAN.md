@@ -28,7 +28,7 @@ and videographers who want automatic, rule-based organization of their footage.
 ## Project Structure
 
 ```
-media-mporter/
+media-porter/
 ├── backend/
 │   ├── core/
 │   │   ├── scanner.py          ✅ scan SD card, camera profile detection
@@ -221,7 +221,7 @@ CREATE TABLE sessions (
 - [x] Import button re-evaluation after dest config changes
 
 ### Phase 4 — Config + Database ⬜ Next
-- [ ] `config.py` — save/load TOML to `~/.media-mporter/config.toml`
+- [ ] `config.py` — save/load TOML to `~/.media-porter/config.toml`
   - Persist destination paths across launches
   - Store last selected drive UUIDs
   - Store folder naming rules

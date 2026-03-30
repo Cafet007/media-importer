@@ -10,8 +10,21 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QPushButton, QFrame, QScrollArea
 )
-from PySide6.QtCore import Signal, Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Signal, Qt, QTimer, QRect
+from PySide6.QtGui import QFont, QPainter
+
+
+class ElidedLabel(QLabel):
+    """QLabel that elides text with '…' when it doesn't fit horizontally."""
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        metrics = self.fontMetrics()
+        elided = metrics.elidedText(self.text(), Qt.ElideRight, self.width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.setFont(self.font())
+        painter.drawText(QRect(0, 0, self.width(), self.height()),
+                         int(self.alignment()), elided)
+        painter.end()
 
 from backend.utils.detector import list_drives, DriveInfo
 from gui.theme import T
@@ -43,29 +56,24 @@ class DriveCard(QFrame):
         text = QVBoxLayout()
         text.setSpacing(2)
 
-        self._name_lbl = QLabel(self.drive.label)
+        self._name_lbl = ElidedLabel(self.drive.label)
         self._name_lbl.setFont(QFont("Arial", 13, QFont.Bold))
+        self._name_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         kind = "SD Card" if self.drive.is_camera_card else "External Drive"
-        self._detail_lbl = QLabel(f"{kind}  ·  {self.drive.total_gb} GB  ·  {self.drive.filesystem}")
+        self._detail_lbl = ElidedLabel(f"{kind}  ·  {self.drive.filesystem}  ·  {self.drive.free_gb} GB free")
         self._detail_lbl.setFont(QFont("Arial", 11))
+        self._detail_lbl.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
 
         text.addWidget(self._name_lbl)
         text.addWidget(self._detail_lbl)
         layout.addLayout(text)
-        layout.addStretch()
-
-        self._free_lbl = QLabel(f"{self.drive.free_gb} GB\nfree")
-        self._free_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._free_lbl.setFont(QFont("Arial", 11))
-        layout.addWidget(self._free_lbl)
 
         self._refresh_labels()
 
     def _refresh_labels(self):
         self._name_lbl.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         self._detail_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
-        self._free_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
 
     def set_selected(self, selected: bool):
         self._selected = selected
@@ -73,6 +81,7 @@ class DriveCard(QFrame):
 
     def _apply_style(self, selected: bool):
         self._refresh_labels()
+        transparent = "QLabel { background: transparent; border: none; }"
         if selected:
             self.setStyleSheet(f"""
                 DriveCard {{
@@ -80,6 +89,7 @@ class DriveCard(QFrame):
                     border: 2px solid {T.BORDER_CARD_SEL};
                     border-radius: 10px;
                 }}
+                {transparent}
             """)
         else:
             hover_bg = "qlineargradient(x1:0,y1:0,x2:0,y2:1, stop:0 #48484a, stop:1 #3a3a3c)" \
@@ -96,6 +106,7 @@ class DriveCard(QFrame):
                     background: {hover_bg};
                     border: 1px solid {hover_border};
                 }}
+                {transparent}
             """)
 
     def mousePressEvent(self, event):
@@ -122,8 +133,8 @@ class SourcePanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(320)
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(360)
         self._all_cards: list[DriveCard] = []
         self._selected_drive: DriveInfo | None = None
         self._build()
@@ -137,6 +148,7 @@ class SourcePanel(QWidget):
         root.setSpacing(0)
 
         self._header_widget = QWidget()
+        self._header_widget.setObjectName("panelHeader")
         self._header_widget.setFixedHeight(52)
         h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 12, 0)
@@ -155,6 +167,7 @@ class SourcePanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
         self._body = QWidget()
         self._body_layout = QVBoxLayout(self._body)
@@ -191,10 +204,14 @@ class SourcePanel(QWidget):
                 }
                 QPushButton:hover { background: #e8e8e8; color: #222; }
             """)
+        self.setStyleSheet(f"SourcePanel {{ background: {T.BG_PANEL}; }}")
         self._scroll.setStyleSheet(
             f"QScrollArea {{ background: {T.BG_PANEL}; border: none; }}"
         )
-        self._body.setStyleSheet(f"background: {T.BG_PANEL};")
+        self._body.setStyleSheet(
+            f"background: {T.BG_PANEL};"
+            f" QLabel {{ background: transparent; border: none; }}"
+        )
         # Recreate cards with new theme
         self.refresh()
 

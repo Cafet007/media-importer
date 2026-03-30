@@ -2,7 +2,7 @@
 Logging setup for Media Porter.
 
 Outputs:
-  - File: ~/.media-mporter/logs/mporter.log  (rotating, 5 MB × 3 files)
+  - File: ~/.media-porter/logs/mporter.log  (rotating, 5 MB × 3 files)
   - Console: WARNING+ only (stays quiet during normal use)
 
 Use in any module:
@@ -17,7 +17,7 @@ import logging.handlers
 from pathlib import Path
 
 
-LOG_DIR  = Path.home() / ".media-mporter" / "logs"
+LOG_DIR  = Path.home() / ".media-porter" / "logs"
 LOG_FILE = LOG_DIR / "mporter.log"
 
 FILE_FORMAT    = "%(asctime)s  %(levelname)-8s  %(name)s  —  %(message)s"

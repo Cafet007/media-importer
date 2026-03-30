@@ -1,5 +1,5 @@
 """
-Config — load/save user settings to ~/.media-mporter/config.toml
+Config — load/save user settings to ~/.media-porter/config.toml
 
 Persists:
   - destination photo_base and video_base paths
@@ -13,7 +13,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_DIR  = Path.home() / ".media-mporter"
+_CONFIG_DIR  = Path.home() / ".media-porter"
 _CONFIG_FILE = _CONFIG_DIR / "config.toml"
 
 

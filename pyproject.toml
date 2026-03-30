@@ -1,5 +1,5 @@
 [project]
-name = "media-mporter"
+name = "media-porter"
 version = "0.1.0"
 description = "Cross-platform media importer from camera SD cards"
 requires-python = ">=3.11"

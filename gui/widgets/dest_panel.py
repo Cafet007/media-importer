@@ -84,8 +84,8 @@ class DestPanel(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(260)
-        self.setMaximumWidth(320)
+        self.setMinimumWidth(220)
+        self.setMaximumWidth(360)
         self._build()
 
     def _build(self):
@@ -94,6 +94,7 @@ class DestPanel(QWidget):
         layout.setSpacing(0)
 
         self._header_widget = QWidget()
+        self._header_widget.setObjectName("panelHeader")
         self._header_widget.setFixedHeight(52)
         h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 16, 0)
@@ -138,9 +139,13 @@ class DestPanel(QWidget):
         self.apply_theme()
 
     def apply_theme(self):
+        self.setStyleSheet(f"DestPanel {{ background: {T.BG_PANEL}; }}")
         self._header_widget.setStyleSheet(T.HEADER_STYLE)
         self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
-        self._body.setStyleSheet(f"background: {T.BG_PANEL};")
+        self._body.setStyleSheet(
+            f"background: {T.BG_PANEL};"
+            f" QLabel {{ background: transparent; border: none; }}"
+        )
         self._drive_label.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         self._div.setStyleSheet(f"color: {T.DIVIDER};")
         self._preview_label.setStyleSheet(f"color: {T.TEXT_PRIMARY};")

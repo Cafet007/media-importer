@@ -9,13 +9,19 @@ A cross-platform desktop application for importing media from camera SD cards to
 - **Automatic SD card detection** — detects cards via direct slot or USB dongle
 - **Camera-aware scanning** — handles Sony, Canon, Nikon, Fuji, GoPro, DJI folder structures (Sony MP4s in `PRIVATE/M4ROOT/CLIP/` are found automatically)
 - **Smart deduplication** — skips files already on your drive (filename + size match)
-- **Rule-based folder organisation** — RAW, JPG and video files sorted into dated subfolders
+- **SHA256 post-copy verification** — confirms every copied file matches the source
+- **Import history database** — SQLite log of every imported file (source, dest, camera, capture date)
+- **Rule-based folder organisation** — customisable templates per file type with live preview
+- **Settings panel** — edit folder naming templates with variable reference
 - **Non-destructive** — always copies, never moves or deletes; source card is never touched
 - **Atomic file copy** — writes to a temp file first, renames only on success; no partial files on failure
 - **Pre-import space check** — warns before starting if destination drive lacks space
-- **Continuous progress** — per-file and within-file progress bar (updates every 4 MB)
+- **Dual progress bars** — overall import progress + per-file within-file bar (updates every 4 MB)
 - **Cancel anytime** — stop import cleanly between files; already-copied files are kept
-- **Full logging** — rotating log at `~/.media-mporter/logs/mporter.log`
+- **Sortable file table** — click any column header to sort by name, type, size, or date
+- **Dark / Light theme** — toggle between dark and gray glossy themes
+- **Persistent config** — destination paths and folder rules saved across launches
+- **Full logging** — rotating log at `~/.media-porter/logs/mporter.log`
 
 ---
 
@@ -31,7 +37,7 @@ A cross-platform desktop application for importing media from camera SD cards to
 
 ## Folder Structure
 
-Files are organised on the destination drive by type and capture date from EXIF / video metadata:
+Files are organised on the destination drive using configurable templates. Default layout:
 
 ```
 External Drive/
@@ -47,13 +53,13 @@ External Drive/
         └── C0001.MP4
 ```
 
-Date folders use the **capture date from metadata**, not today's date.
+Date folders use the **capture date from EXIF / video metadata**, not today's date. Templates are fully customisable via the Settings panel using variables like `{year}`, `{month_name}`, `{camera_make}`, etc.
 
 ---
 
 ## Requirements
 
-- Python 3.11+
+- Python 3.9+
 - macOS or Windows
 - [MediaInfo](https://mediaarea.net/en/MediaInfo) (required by `pymediainfo` for video metadata)
 
@@ -63,15 +69,15 @@ Date folders use the **capture date from metadata**, not today's date.
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourname/media-mporter.git
-cd media-mporter
+git clone git@github.com:Cafet007/media-porter.git
+cd media-porter
 
-# Create and activate conda environment
-conda create -n media-mporter python=3.11 -y
-conda activate media-mporter
+# Create and activate a virtual environment (conda or venv)
+conda create -n media-porter python=3.11 -y
+conda activate media-porter
 
 # Install dependencies
-pip install -e ".[dev]"
+pip install -r requirements.txt
 ```
 
 ---
@@ -79,7 +85,7 @@ pip install -e ".[dev]"
 ## Running
 
 ```bash
-conda activate media-mporter
+conda activate media-porter
 python main.py
 ```
 
@@ -90,7 +96,7 @@ python main.py
 1. **Plug in your SD card** — it appears under **Camera Cards** in the left panel
 2. **Select your external drive** — click it under **Storage Drives**; destination paths are auto-filled
 3. **Click Scan Card** — the app scans the card and shows all files with New / Already Imported status
-4. **Click Import New Files** — only new files are copied; progress updates per chunk
+4. **Click Import New Files** — only new files are copied; dual progress bars update per chunk
 5. **Cancel anytime** — the current file finishes cleanly, already-copied files are kept
 
 ---
@@ -113,7 +119,7 @@ python inspect_files.py /Volumes/Untitled
 ## Running Tests
 
 ```bash
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
 
 ---
@@ -121,7 +127,7 @@ python -m pytest tests/ -v
 ## Project Structure
 
 ```
-media-mporter/
+media-porter/
 ├── backend/
 │   ├── core/
 │   │   ├── scanner.py          # SD card scan with camera profile detection
@@ -129,23 +135,37 @@ media-mporter/
 │   │   ├── inspector.py        # extract kind + capture date from any file
 │   │   ├── metadata.py         # EXIF (exifread/Pillow) + video (pymediainfo)
 │   │   ├── models.py           # MediaFile, MediaType
-│   │   ├── rules.py            # destination path engine
+│   │   ├── rules.py            # destination path engine + template variables
 │   │   ├── importer.py         # chunked copy engine with progress + cancel
 │   │   ├── dedup.py            # filename+size dedup index
 │   │   └── safety.py           # safety guards, atomic copy, space checks
+│   ├── db/
+│   │   ├── models.py           # SQLAlchemy ORM (ImportRecord, ImportSession)
+│   │   └── repository.py       # import history CRUD
 │   └── utils/
 │       ├── detector.py         # drive detection (Mac diskutil / Windows ctypes)
 │       ├── registry.py         # drive role registry (persisted JSON)
+│       ├── config.py           # load/save TOML config
 │       └── log_setup.py        # rotating file log + console handler
 ├── gui/
 │   ├── main_window.py          # main window, workers, signals
+│   ├── theme.py                # dark/light theme palette + style helpers
 │   └── widgets/
 │       ├── source_panel.py     # Camera Cards / Storage Drives sections
 │       ├── dest_panel.py       # destination path pickers
-│       └── file_table.py       # file list with live status updates
+│       ├── file_table.py       # sortable file list with live status updates
+│       ├── history_panel.py    # import history viewer
+│       └── settings_panel.py   # folder naming template editor
 ├── tests/
+│   ├── test_scanner.py
+│   ├── test_safety.py
+│   ├── test_detector.py
+│   ├── test_rules.py
+│   ├── test_dedup.py
+│   └── test_importer.py
 ├── main.py                     # entry point
-└── pyproject.toml
+├── requirements.txt
+└── PLAN.md
 ```
 
 ---
@@ -159,32 +179,22 @@ media-mporter/
 | Never overwrite existing files | Existence check before every copy |
 | No partial files on failure | Atomic temp file → rename on success only |
 | Space check before import | Batch check per destination drive, blocks import if insufficient |
+| Post-copy verification | SHA256 of source computed during copy, stored in DB |
 
 ---
 
-## Logs
+## Logs & Data
 
 ```
-~/.media-mporter/
+~/.media-porter/
 ├── logs/
 │   ├── mporter.log        # current log (up to 5 MB)
 │   ├── mporter.log.1      # previous
 │   └── mporter.log.2
+├── config.toml            # saved destination paths + folder naming rules
+├── history.db             # SQLite import history
 └── drives.json            # saved drive registry
 ```
-
----
-
-## Roadmap
-
-- [ ] Persistent config (TOML) — save destination paths across launches
-- [ ] Import history database (SQLite) — bulletproof dedup, import log viewer
-- [ ] Post-copy SHA256 verification
-- [ ] Customisable folder naming templates
-- [ ] Settings panel
-- [ ] PyInstaller packaging — `.app` for Mac, `.exe` for Windows
-
-See [PLAN.md](PLAN.md) for full detail.
 
 ---
 

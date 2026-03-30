@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt, Signal, QObject
 from PySide6.QtGui import QFont
+from gui.widgets.source_panel import ElidedLabel
 
 from backend.utils.detector import DriveInfo
 from backend.utils.config import get_dest_paths, save_dest_paths, get_rules, get_dark_mode, save_dark_mode
@@ -53,7 +54,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Media Porter")
-        self.setMinimumSize(1100, 680)
+        self.setMinimumSize(800, 580)
 
         self._sig = _Signals()
         self._sig.scan_done.connect(self._on_scan_done)
@@ -116,6 +117,7 @@ class MainWindow(QMainWindow):
 
     def _build_header(self) -> QWidget:
         self._header = QWidget()
+        self._header.setObjectName("panelHeader")
         self._header.setFixedHeight(52)
         layout = QHBoxLayout(self._header)
         layout.setContentsMargins(20, 0, 20, 0)
@@ -126,14 +128,16 @@ class MainWindow(QMainWindow):
 
         layout.addStretch()
 
-        self._header_status = QLabel("")
+        self._header_status = ElidedLabel("")
         self._header_status.setFont(QFont("Arial", 12))
+        self._header_status.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         layout.addWidget(self._header_status)
 
         self._theme_btn = QPushButton()
-        self._theme_btn.setFixedSize(32, 32)
+        self._theme_btn.setFixedSize(72, 32)
         self._theme_btn.setToolTip("Toggle dark / light mode")
         self._theme_btn.clicked.connect(self._toggle_theme)
+        layout.addSpacing(8)
         layout.addWidget(self._theme_btn)
 
         self._settings_btn = QPushButton("⚙  Settings")
@@ -201,19 +205,23 @@ class MainWindow(QMainWindow):
         self._apply_theme()
 
     def _apply_theme(self):
-        self.setStyleSheet(f"QMainWindow {{ background: {T.BG_BASE}; }}")
+        self.setStyleSheet(
+            f"QMainWindow {{ background: {T.BG_BASE}; }}"
+            f" QLabel {{ background: transparent; }}"
+        )
 
         # Header
         self._header.setStyleSheet(T.HEADER_STYLE)
         self._app_title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         self._header_status.setStyleSheet(f"color: {T.TEXT_SECONDARY};")
-        self._theme_btn.setText("☀" if T.dark else "🌙")
+        self._theme_btn.setText("Light" if T.dark else "Dark")
         self._theme_btn.setStyleSheet(T.btn_secondary(h=32))
         self._settings_btn.setStyleSheet(T.btn_secondary(h=32))
 
         # Splitter
         self._splitter.setStyleSheet(
-            f"QSplitter::handle {{ background: {T.SPLITTER}; }}"
+            f"QSplitter {{ background: {T.BG_BASE}; }}"
+            f" QSplitter::handle {{ background: {T.SPLITTER}; }}"
         )
 
         # Tabs
@@ -222,6 +230,7 @@ class MainWindow(QMainWindow):
         # Bottom bar
         self._bottom_bar.setStyleSheet(
             f"background: {T.BG_BOTTOM}; border-top: 1px solid {T.DIVIDER};"
+            f" QLabel {{ background: transparent; border: none; }}"
         )
         self._scan_btn.setStyleSheet(T.btn_secondary(h=40))
         self._import_btn.setStyleSheet(T.btn_primary(h=40))
@@ -231,8 +240,9 @@ class MainWindow(QMainWindow):
 
         # Status bar
         self._status_bar.setStyleSheet(
-            f"background: {T.BG_BOTTOM}; color: {T.TEXT_SECONDARY}; font-size: 11px;"
-            f" border-top: 1px solid {T.DIVIDER};"
+            f"QStatusBar {{ background: {T.BG_BOTTOM}; color: {T.TEXT_SECONDARY};"
+            f" font-size: 11px; border-top: 1px solid {T.DIVIDER}; }}"
+            f" QStatusBar::item {{ border: none; }}"
         )
 
         # Child panels

@@ -25,6 +25,7 @@ class HistoryPanel(QWidget):
         layout.setSpacing(0)
 
         self._header_widget = QWidget()
+        self._header_widget.setObjectName("panelHeader")
         self._header_widget.setFixedHeight(52)
         h_layout = QHBoxLayout(self._header_widget)
         h_layout.setContentsMargins(16, 0, 16, 0)
@@ -57,12 +58,23 @@ class HistoryPanel(QWidget):
         self._table.setSortingEnabled(True)
         layout.addWidget(self._table, stretch=1)
 
+        self._empty_lbl = QLabel("No import history yet.\nFiles will appear here after your first import.")
+        self._empty_lbl.setAlignment(Qt.AlignCenter)
+        self._empty_lbl.setFont(QFont("Arial", 13))
+        self._empty_lbl.hide()
+        layout.addWidget(self._empty_lbl)
+
         self.apply_theme()
 
     def apply_theme(self):
         self._header_widget.setStyleSheet(T.HEADER_STYLE)
         self._title_lbl.setStyleSheet(T.PANEL_TITLE_STYLE)
         self._table.setStyleSheet(T.TABLE_STYLE)
+        self.setStyleSheet(
+            f"HistoryPanel {{ background: {T.BG_PANEL}; }}"
+            f" QLabel {{ background: transparent; border: none; }}"
+        )
+        self._empty_lbl.setStyleSheet(f"color: {T.TEXT_MUTED};")
         if T.dark:
             self._refresh_btn.setStyleSheet("""
                 QPushButton {
@@ -93,6 +105,8 @@ class HistoryPanel(QWidget):
 
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(records))
+        self._table.setVisible(bool(records))
+        self._empty_lbl.setVisible(not records)
 
         for row, rec in enumerate(records):
             from pathlib import Path

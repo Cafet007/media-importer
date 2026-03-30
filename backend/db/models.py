@@ -13,7 +13,7 @@ from typing import Optional
 from sqlalchemy import BigInteger, DateTime, Integer, String, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
-_DB_PATH = Path.home() / ".media-mporter" / "history.db"
+_DB_PATH = Path.home() / ".media-porter" / "history.db"
 
 
 class Base(DeclarativeBase):
