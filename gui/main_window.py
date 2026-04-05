@@ -458,10 +458,9 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_worker, daemon=True).start()
 
     def _on_progress(self, done: int, total: int, filename: str, bytes_done: float, bytes_total: float):
-        file_pct = bytes_done / bytes_total if bytes_total else 1.0
-        overall  = (done - 1 + file_pct) / total
+        overall = bytes_done / bytes_total if bytes_total else 1.0
         self._progress.setValue(int(overall * 100))
-        self._file_progress.setValue(int(file_pct * 1000))
+        self._file_progress.setValue(int(overall * 1000))
 
         mb_done  = bytes_done  / 1_048_576
         mb_total = bytes_total / 1_048_576

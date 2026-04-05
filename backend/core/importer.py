@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -61,6 +62,9 @@ class ImportResult:
         return "  |  ".join(parts)
 
 
+_WORKERS = 4  # concurrent file copies
+
+
 def run_import(
     files: list[MediaFile],
     config: DestinationConfig,
@@ -74,6 +78,7 @@ def run_import(
         files:         Scanned + metadata-enriched MediaFile list from SD card.
         config:        DestinationConfig with photo_base and video_base paths.
         progress_cb:   Optional callback(done, total, filename, bytes_done, bytes_total).
+                       bytes_done/bytes_total reflect aggregate bytes across all files.
         cancel_event:  Optional threading.Event — set it to stop import between files.
 
     Returns:
@@ -107,39 +112,81 @@ def run_import(
         return result
 
     total = len(new_files)
-    logger.info("Importing %d new files", total)
+    total_bytes = sum(f.size_bytes for f in new_files)
+    logger.info("Importing %d new files (%.1f MB)", total, total_bytes / 1_048_576)
 
     # Derive source root for session recording
     source_root = new_files[0].path.parent if new_files else Path(".")
 
-    for i, file in enumerate(new_files, 1):
+    # Shared counters — protected by lock
+    lock = threading.Lock()
+    files_done = 0
+    bytes_done_total = 0
+    # Track per-file bytes contributed so far (for aggregate progress)
+    file_bytes: dict[str, int] = {}
+
+    def _copy_one(file: MediaFile) -> tuple[MediaFile, Path | None, str | None, str | None]:
+        """Copy a single file. Returns (file, dest_path, hash, error_str)."""
+        nonlocal files_done, bytes_done_total
+
         if cancel_event and cancel_event.is_set():
-            logger.info("Import cancelled by user at file %d/%d", i, total)
-            break
+            return file, None, None, "cancelled"
 
         dest_path = destination(file, config)
 
-        def _bytes_cb(done: int, total_bytes: int, _i=i, _name=file.name) -> None:
-            if progress_cb:
-                progress_cb(_i, total, _name, done, total_bytes)
+        def _bytes_cb(chunk_done: int, file_total: int) -> None:
+            nonlocal bytes_done_total
+            if not progress_cb:
+                return
+            with lock:
+                prev = file_bytes.get(file.name, 0)
+                delta = chunk_done - prev
+                file_bytes[file.name] = chunk_done
+                bytes_done_total += delta
+                _done = files_done
+                _bd = bytes_done_total
+            progress_cb(_done, total, file.name, _bd, total_bytes)
 
         try:
             copied_to, file_hash = safe_copy(file.path, dest_path, bytes_cb=_bytes_cb)
-            file.file_hash = file_hash
-            result.copied.append((file, copied_to))
-            record_import(file, copied_to)
-            logger.debug("Copied [%d/%d] %s → %s", i, total, file.name, copied_to)
+            return file, copied_to, file_hash, None
         except SafetyError as e:
-            err = str(e)
-            if "DESTINATION EXISTS" in err:
-                logger.warning("Conflict [%d/%d] %s — dest already exists", i, total, file.name)
-                result.conflicts.append(file)
-            else:
-                logger.error("Safety blocked [%d/%d] %s — %s", i, total, file.name, err)
-                result.failed.append((file, err))
+            return file, None, None, str(e)
         except Exception as e:
-            logger.error("Copy failed [%d/%d] %s — %s", i, total, file.name, e)
-            result.failed.append((file, str(e)))
+            return file, None, None, str(e)
+
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        futures = {pool.submit(_copy_one, f): f for f in new_files}
+        for future in as_completed(futures):
+            file, copied_to, file_hash, err = future.result()
+
+            if err == "cancelled":
+                logger.info("Import cancelled — skipping %s", file.name)
+                continue
+
+            with lock:
+                files_done += 1
+                _done = files_done
+
+            if err is None:
+                file.file_hash = file_hash
+                with lock:
+                    result.copied.append((file, copied_to))
+                record_import(file, copied_to)
+                logger.debug("Copied [%d/%d] %s → %s", _done, total, file.name, copied_to)
+                # Emit a final 100% progress event for this file
+                if progress_cb:
+                    with lock:
+                        _bd = bytes_done_total
+                    progress_cb(_done, total, file.name, _bd, total_bytes)
+            elif "DESTINATION EXISTS" in err:
+                logger.warning("Conflict [%d/%d] %s — dest already exists", _done, total, file.name)
+                with lock:
+                    result.conflicts.append(file)
+            else:
+                logger.error("Failed [%d/%d] %s — %s", _done, total, file.name, err)
+                with lock:
+                    result.failed.append((file, err))
 
     finished_at = datetime.utcnow()
     record_session(
