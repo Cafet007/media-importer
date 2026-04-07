@@ -45,6 +45,7 @@ class ImportSession(Base):
     imported:    Mapped[Optional[int]]      = mapped_column(Integer)
     skipped:     Mapped[Optional[int]]      = mapped_column(Integer)
     errors:      Mapped[Optional[int]]      = mapped_column(Integer)
+    verified:    Mapped[Optional[int]]      = mapped_column(Integer)
     started_at:  Mapped[Optional[datetime]] = mapped_column(DateTime)
     finished_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 

@@ -3,7 +3,7 @@
 ## Vision
 A cross-platform desktop app (Mac + Windows) that imports media from camera SD cards
 into a user-defined folder structure on an external hard drive. Built for photographers
-and videographers who want automatic, rule-based organization of their footage.
+and videographers who want safe, verified, rule-based organization of their footage.
 
 ---
 
@@ -17,11 +17,11 @@ and videographers who want automatic, rule-based organization of their footage.
 | Photo meta   | `Pillow`, `exifread`              | ✅ Done      |
 | Video meta   | `pymediainfo`                     | ✅ Done      |
 | Dedup        | filename + size (fast scan dedup) | ✅ Done      |
-| Dedup        | `hashlib` SHA256 (post-copy verify)| ⬜ Planned  |
-| Database     | SQLite + SQLAlchemy               | ⬜ Planned   |
+| Dedup        | `hashlib` SHA256 (post-copy verify)| 🔧 Phase 1 |
+| Database     | SQLite + SQLAlchemy               | 🔧 Phase 2  |
 | SD detection | polling (DriveWatcher)            | ✅ Done      |
-| Packaging    | PyInstaller (`.app` / `.exe`)     | ⬜ Planned   |
-| Config       | TOML (`tomllib` / `tomli-w`)      | ⬜ Planned   |
+| Packaging    | PyInstaller (`.app` / `.exe`)     | ⬜ Phase 3  |
+| Config       | TOML (`tomllib` / `tomli-w`)      | 🔧 Phase 2  |
 
 ---
 
@@ -60,9 +60,9 @@ media-porter/
 │   ├── test_scanner.py         ✅
 │   ├── test_safety.py          ✅
 │   ├── test_detector.py        ✅
-│   ├── test_rules.py           ⬜
-│   ├── test_dedup.py           ⬜
-│   └── test_importer.py        ⬜
+│   ├── test_rules.py           ✅
+│   ├── test_dedup.py           ✅
+│   └── test_importer.py        ✅
 ├── main.py                     ✅ entry point, dark palette, logging setup
 ├── pyproject.toml
 ├── requirements.txt
@@ -80,7 +80,8 @@ SD Card (DCIM/ + PRIVATE/M4ROOT/CLIP/)
                     └─► DedupChecker  → filter_new() via filename+size index
                             └─► Rule Engine   → compute destination path
                                     └─► safe_copy()   → atomic temp→rename, chunked progress
-                                            └─► DB (planned) → record import history
+                                            └─► SHA256 verify  → confirm dest matches source
+                                                    └─► DB → record import history
 ```
 
 ---
@@ -121,7 +122,7 @@ Photography/
 Footage/
   YYYY-MM-DD/          C0001.MP4
 ```
-> Template engine will replace hardcoded layout in a future phase.
+> Template engine will replace hardcoded layout in Phase 2.
 
 ### Example output (template engine)
 ```
@@ -157,18 +158,22 @@ CREATE TABLE imports (
     camera_make  TEXT,
     camera_model TEXT,
     captured_at  DATETIME,
-    imported_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    imported_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    session_id   INTEGER REFERENCES sessions(id)
 );
 
 -- import sessions
 CREATE TABLE sessions (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    name         TEXT,                  -- user-defined shoot/job name
     source_root  TEXT NOT NULL,
     dest_root    TEXT NOT NULL,
+    backup_root  TEXT,                  -- second destination (dual backup)
     total_files  INTEGER,
     imported     INTEGER,
     skipped      INTEGER,
     errors       INTEGER,
+    verified     INTEGER,               -- files that passed SHA256 check
     started_at   DATETIME,
     finished_at  DATETIME
 );
@@ -176,7 +181,7 @@ CREATE TABLE sessions (
 
 ---
 
-## Safety System (implemented)
+## Safety System
 
 | Rule | Implementation |
 |---|---|
@@ -188,64 +193,100 @@ CREATE TABLE sessions (
 | Atomic copy | Write to `.mporter_tmp_` → rename on success |
 | Temp cleanup | `finally` block deletes temp on failure |
 | Block scanning dest drive | `_is_dest_drive()` check in GUI before scan |
+| Post-copy verification | SHA256 source vs dest after every file (Phase 1) |
+
+### Known Safety Bugs (Phase 1 fixes)
+- Source card is only registered as protected inside `detector.py`; GUI `list_drives()` does not register it — card may not be guarded during import
+- `safety.py` creates the destination directory before `guard_write()` runs — a misconfigured dest could cause writes into a protected path
+- Duplicate filename identity uses bare `f.name` in several places — two files named `IMG_0001.JPG` from different folders can be miscounted or shown with wrong status
 
 ---
 
-## Build Phases
+## Known Bugs (to fix in Phase 1)
 
-### Phase 1 — Core Engine ✅ Complete
-- [x] `scanner.py` — walk DCIM + Sony PRIVATE/M4ROOT/CLIP/, classify files
-- [x] `camera_profiles.py` — per-brand folder structure profiles
-- [x] `metadata.py` — EXIF from JPG/RAW, metadata from MP4
-- [x] `inspector.py` — kind + date with fallback chain
-- [x] `models.py` — MediaFile, MediaType, classify()
-- [x] `rules.py` — destination path engine (Option B layout)
-- [x] `importer.py` — chunked copy, progress callback, cancel support
-- [x] `dedup.py` — filename+size index, filter_new()
-- [x] `safety.py` — full safety guard suite + batch space check
-- [x] CLI scripts: `scan_card.py`, `import_card.py`, `inspect_files.py`
+| # | File | Line | Description |
+|---|------|------|-------------|
+| 1 | `backend/utils/detector.py` + `gui/widgets/source_panel.py` | 110 / 17, 207 | Source card not registered as protected in GUI path |
+| 2 | `backend/core/safety.py` | 177–180 | Dest dir created before `guard_write()` runs |
+| 3 | `gui/main_window.py`, `backend/core/importer.py`, `gui/widgets/file_table.py` | 379, 423 / 125 / 242 | Duplicate filename identity uses bare name, not `(name, size)` |
+| 4 | `import_card.py` | 58 | CLI progress callback accepts 3 args, importer passes 5 |
+| 5 | `gui/main_window.py` | 460 | Per-file progress bar shows batch bytes, not file bytes |
 
-### Phase 2 — Drive Detection + Logging ✅ Complete
-- [x] `detector.py` — DriveInfo, list_drives(), find_camera_cards(), DriveWatcher
-- [x] `registry.py` — DriveRegistry persisted to drives.json
-- [x] `log_setup.py` — RotatingFileHandler (5MB×3) + console WARNING+
-- [x] Logging wired throughout all backend + GUI modules
+---
 
-### Phase 3 — GUI ✅ Complete (base)
-- [x] `main_window.py` — dark Fusion theme, scan/import workers, cancel button
-- [x] `source_panel.py` — two sections: Camera Cards / Storage Drives
-- [x] `dest_panel.py` — path pickers, auto-fill from selected drive
-- [x] `file_table.py` — file list, New/In Progress/Copied/Failed status, auto-scroll
-- [x] Pre-import space check with blocking error dialog
-- [x] Within-file progress bar (chunked, updates every 4 MB)
-- [x] Import button re-evaluation after dest config changes
+## Roadmap
 
-### Phase 4 — Config + Database ⬜ Next
-- [ ] `config.py` — save/load TOML to `~/.media-porter/config.toml`
-  - Persist destination paths across launches
-  - Store last selected drive UUIDs
-  - Store folder naming rules
-- [ ] `db/models.py` + `db/repository.py` — SQLAlchemy import history
-  - Replace filename+size dedup with SHA256 hash dedup via DB
-  - Record every imported file with source, dest, date, camera
-- [ ] Post-copy SHA256 verification — confirm copied file matches source
-- [ ] Import history viewer panel in GUI
+### Phase 1 — Fix & Stabilize ✅ Target: April 2026
+**Goal: app is safe and trustworthy on real shoots**
 
-### Phase 5 — Rules Editor + Settings ⬜ Planned
-- [ ] `config.py` rule template parser — resolve `{year}`, `{month_name}` etc.
-- [ ] Replace hardcoded `rules.py` layout with template engine
-- [ ] `settings_panel.py` — folder naming prefs, default paths, chunk size
-- [ ] `rules_editor.py` — visual template editor with live path preview
-- [ ] Conflict resolution UI — show files that hit DESTINATION EXISTS
+**Week 1 — Critical bugs**
+- [ ] Fix safety gap: register source card as protected in GUI, not just in `detector.py`
+- [ ] Fix write-before-guard: move dest dir creation to after `guard_write()` in `safety.py`
+- [ ] Fix duplicate filename identity: use `(name, size)` tuples instead of bare names throughout
+- [ ] Fix broken CLI: align `import_card.py` progress callback to 5-argument signature
 
-### Phase 6 — Polish + Packaging ⬜ Planned
-- [ ] App icon (`.icns` for Mac, `.ico` for Windows)
-- [ ] PyInstaller spec for Mac `.app` bundle
-- [ ] `create-dmg` script for distributable `.dmg`
-- [ ] PyInstaller spec for Windows `.exe`
-- [ ] Windows drive detection testing + fixes
-- [ ] Error log panel + retry failed imports
+**Week 2 — Core missing features**
+- [ ] Post-copy SHA256 verification: hash source before copy, hash dest after, show pass/fail
+- [ ] Fix progress bars: per-file bar shows file bytes, overall bar shows batch bytes
+- [ ] Resume/recovery: on relaunch after crash, skip already-copied files via dedup
+- [ ] Session report: plain text or CSV — copied, skipped, failed, verification result per file
+
+**Exit criteria:** 10 real testers use it on actual card ingests with zero data-loss incidents.
+
+---
+
+### Phase 2 — Paid V1 ⬜ Target: June 2026
+**Goal: first version worth charging for**
+
+**Storage & History**
+- [ ] SQLite import history via `db/repository.py` (schema above)
+- [ ] Replace filename+size dedup with SHA256 hash dedup against history DB
+- [ ] History panel: searchable by date, camera, session
+
+**Workflow**
+- [ ] Dual-destination copy: main drive + backup drive simultaneously
+- [ ] Job/session naming before import (client name, shoot name)
+- [ ] Presets: save and recall destination path + folder rule per workflow
+- [ ] Sidecar awareness: keep RAW + JPG + XMP + LRV/THM together
+
+**Settings & Config**
+- [ ] `config.py` with TOML persistence: last destination, last drive, folder rules
+- [ ] Settings panel: chunk size, verification mode, default paths
+- [ ] Template rule engine: replace hardcoded layout with `{year}/{month_name}` variables
+
+**Pricing at launch**
+
+| Tier | Price | Limits |
+|------|-------|--------|
+| Free | $0 | Single destination, no presets, no history search |
+| Pro  | $89 one-time | Dual backup, presets, full history, verification badge |
+
+---
+
+### Phase 3 — Pro Differentiation ⬜ Target: Sept–Nov 2026
+**Goal: photographers describe it as part of their normal shoot workflow**
+
+- [ ] Auto-ingest on card insert (skip manual scan step)
+- [ ] Queue multiple cards / jobs
+- [ ] Rename rules during import (not just folder structure)
+- [ ] Drive health warnings: destination space forecast before import starts
+- [ ] Watch-folder / hot-folder mode for studio use
+- [ ] Conflict resolution UI: show files that hit destination-exists collision
+- [ ] Error log panel + retry failed files
 - [ ] Thumbnail preview before import
+- [ ] App icon, PyInstaller `.app` bundle, `create-dmg` script
+- [ ] Windows drive detection testing + `.exe` packaging
+
+
+---
+
+## What Not to Build
+- AI culling or editing features
+- Cloud gallery or social publishing
+- Digital asset management (DAM)
+- Mobile companion app
+
+These will not be built unless demand is proven by paying users requesting them.
 
 ---
 
@@ -263,13 +304,14 @@ CREATE TABLE sessions (
 
 1. **Non-destructive** — always copy, never move; source SD card is untouched
 2. **Safety first** — protected path registry, atomic copy, no overwrite, no delete
-3. **Fast dedup** — filename+size index for scan (avoids hashing 600 RAW files upfront); SHA256 for DB history (planned)
-4. **Camera-aware scanning** — Sony stores videos in PRIVATE/M4ROOT/CLIP/, not DCIM
-5. **Rule templates** — user-configurable, stored in TOML, editable via GUI (planned)
-6. **Offline-first** — no cloud, no login, fully local
-7. **Resumable imports** — interrupted import re-runs skip already-copied files via dedup
-8. **Cross-platform paths** — `pathlib.Path` throughout, no hardcoded separators
-9. **Chunked copy** — 4 MB chunks, continuous progress bar, cancel between files
+3. **Verified** — SHA256 hash check after every copy confirms data integrity
+4. **Fast dedup** — filename+size index for scan (avoids hashing 600 RAW files upfront); SHA256 for DB history
+5. **Camera-aware scanning** — Sony stores videos in PRIVATE/M4ROOT/CLIP/, not DCIM
+6. **Rule templates** — user-configurable, stored in TOML, editable via GUI (Phase 2)
+7. **Offline-first** — no cloud, no login, fully local
+8. **Resumable imports** — interrupted import re-runs skip already-copied files via dedup
+9. **Cross-platform paths** — `pathlib.Path` throughout, no hardcoded separators
+10. **Chunked copy** — 4 MB chunks, continuous progress bar, cancel between files
 
 ---
 

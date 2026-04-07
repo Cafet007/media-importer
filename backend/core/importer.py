@@ -23,17 +23,19 @@ from typing import Callable
 from .dedup import DedupChecker
 from .models import MediaFile
 from .rules import destination, DestinationConfig
-from .safety import safe_copy, SafetyError
+from .safety import safe_copy, verify_copy, SafetyError
 
 logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ImportResult:
-    copied:    list[tuple[MediaFile, Path]] = field(default_factory=list)
-    skipped:   list[MediaFile]              = field(default_factory=list)  # already exists (dedup)
-    conflicts: list[MediaFile]              = field(default_factory=list)  # dest path exists
-    failed:    list[tuple[MediaFile, str]]  = field(default_factory=list)  # copy error
+    copied:         list[tuple[MediaFile, Path]] = field(default_factory=list)
+    skipped:        list[MediaFile]              = field(default_factory=list)  # already exists (dedup)
+    conflicts:      list[MediaFile]              = field(default_factory=list)  # dest path exists
+    failed:         list[tuple[MediaFile, str]]  = field(default_factory=list)  # copy error
+    verified:       list[MediaFile]              = field(default_factory=list)  # passed SHA256 check
+    verify_failed:  list[MediaFile]              = field(default_factory=list)  # failed SHA256 check
 
     @property
     def total_copied(self) -> int:
@@ -51,14 +53,25 @@ class ImportResult:
     def total_conflicts(self) -> int:
         return len(self.conflicts)
 
+    @property
+    def total_verified(self) -> int:
+        return len(self.verified)
+
+    @property
+    def total_verify_failed(self) -> int:
+        return len(self.verify_failed)
+
     def summary(self) -> str:
         mb = sum(f.size_mb for f, _ in self.copied)
         parts = [f"Copied {self.total_copied} files ({mb:.1f} MB)",
+                 f"Verified {self.total_verified}",
                  f"Skipped {self.total_skipped}"]
         if self.total_conflicts:
             parts.append(f"Conflicts {self.total_conflicts}")
         if self.total_failed:
             parts.append(f"Failed {self.total_failed}")
+        if self.total_verify_failed:
+            parts.append(f"Verify failed {self.total_verify_failed}")
         return "  |  ".join(parts)
 
 
@@ -68,7 +81,8 @@ _WORKERS = 4  # concurrent file copies
 def run_import(
     files: list[MediaFile],
     config: DestinationConfig,
-    progress_cb: Callable[[int, int, str, int, int], None] | None = None,
+    progress_cb: Callable[[int, int, str, int, int, int, int], None] | None = None,
+    verify_cb: Callable[[str, bool], None] | None = None,
     cancel_event: threading.Event | None = None,
 ) -> ImportResult:
     """
@@ -77,8 +91,10 @@ def run_import(
     Args:
         files:         Scanned + metadata-enriched MediaFile list from SD card.
         config:        DestinationConfig with photo_base and video_base paths.
-        progress_cb:   Optional callback(done, total, filename, bytes_done, bytes_total).
+        progress_cb:   Optional callback(done, total, filename, bytes_done, bytes_total,
+                       file_bytes_done, file_bytes_total).
                        bytes_done/bytes_total reflect aggregate bytes across all files.
+                       file_bytes_done/file_bytes_total reflect progress of the current file.
         cancel_event:  Optional threading.Event — set it to stop import between files.
 
     Returns:
@@ -122,15 +138,15 @@ def run_import(
     lock = threading.Lock()
     files_done = 0
     bytes_done_total = 0
-    # Track per-file bytes contributed so far (for aggregate progress)
-    file_bytes: dict[str, int] = {}
+    # Track per-file bytes contributed so far (for aggregate progress), keyed by full path
+    file_bytes: dict[Path, int] = {}
 
-    def _copy_one(file: MediaFile) -> tuple[MediaFile, Path | None, str | None, str | None]:
-        """Copy a single file. Returns (file, dest_path, hash, error_str)."""
+    def _copy_one(file: MediaFile) -> tuple[MediaFile, Path | None, str | None, bool, str | None]:
+        """Copy and verify a single file. Returns (file, dest_path, hash, verify_ok, error_str)."""
         nonlocal files_done, bytes_done_total
 
         if cancel_event and cancel_event.is_set():
-            return file, None, None, "cancelled"
+            return file, None, None, False, "cancelled"
 
         dest_path = destination(file, config)
 
@@ -139,26 +155,27 @@ def run_import(
             if not progress_cb:
                 return
             with lock:
-                prev = file_bytes.get(file.name, 0)
+                prev = file_bytes.get(file.path, 0)
                 delta = chunk_done - prev
-                file_bytes[file.name] = chunk_done
+                file_bytes[file.path] = chunk_done
                 bytes_done_total += delta
                 _done = files_done
                 _bd = bytes_done_total
-            progress_cb(_done, total, file.name, _bd, total_bytes)
+            progress_cb(_done, total, file.name, _bd, total_bytes, chunk_done, file_total)
 
         try:
             copied_to, file_hash = safe_copy(file.path, dest_path, bytes_cb=_bytes_cb)
-            return file, copied_to, file_hash, None
+            verify_ok = verify_copy(copied_to, file_hash)
+            return file, copied_to, file_hash, verify_ok, None
         except SafetyError as e:
-            return file, None, None, str(e)
+            return file, None, None, False, str(e)
         except Exception as e:
-            return file, None, None, str(e)
+            return file, None, None, False, str(e)
 
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
         futures = {pool.submit(_copy_one, f): f for f in new_files}
         for future in as_completed(futures):
-            file, copied_to, file_hash, err = future.result()
+            file, copied_to, file_hash, verify_ok, err = future.result()
 
             if err == "cancelled":
                 logger.info("Import cancelled — skipping %s", file.name)
@@ -172,13 +189,19 @@ def run_import(
                 file.file_hash = file_hash
                 with lock:
                     result.copied.append((file, copied_to))
+                    if verify_ok:
+                        result.verified.append(file)
+                    else:
+                        result.verify_failed.append(file)
                 record_import(file, copied_to)
                 logger.debug("Copied [%d/%d] %s → %s", _done, total, file.name, copied_to)
                 # Emit a final 100% progress event for this file
                 if progress_cb:
                     with lock:
                         _bd = bytes_done_total
-                    progress_cb(_done, total, file.name, _bd, total_bytes)
+                    progress_cb(_done, total, file.name, _bd, total_bytes, file.size_bytes, file.size_bytes)
+                if verify_cb:
+                    verify_cb(file.name, verify_ok)
             elif "DESTINATION EXISTS" in err:
                 logger.warning("Conflict [%d/%d] %s — dest already exists", _done, total, file.name)
                 with lock:
@@ -196,6 +219,7 @@ def run_import(
         imported    = result.total_copied,
         skipped     = result.total_skipped,
         errors      = result.total_failed,
+        verified    = result.total_verified,
         started_at  = started_at,
         finished_at = finished_at,
     )

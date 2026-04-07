@@ -35,7 +35,7 @@ from backend.core.inspector import inspect_all
 from backend.core.dedup import DedupChecker
 from backend.core.importer import run_import
 from backend.core.rules import DestinationConfig
-from backend.core.safety import check_batch_space
+from backend.core.safety import check_batch_space, protect
 
 from gui.theme import T
 from .widgets.source_panel import SourcePanel
@@ -48,7 +48,8 @@ logger = logging.getLogger(__name__)
 
 class _Signals(QObject):
     scan_done   = Signal(object, object)
-    progress    = Signal(int, int, str, float, float)
+    progress    = Signal(int, int, str, float, float, float, float)
+    verify_done = Signal(str, bool)
     import_done = Signal(object)
     status      = Signal(str)
 
@@ -62,11 +63,12 @@ class MainWindow(QMainWindow):
         self._sig = _Signals()
         self._sig.scan_done.connect(self._on_scan_done)
         self._sig.progress.connect(self._on_progress)
+        self._sig.verify_done.connect(self._on_verify_done)
         self._sig.import_done.connect(self._on_import_done)
         self._sig.status.connect(self._set_status)
 
         self._scan_result = None
-        self._new_set: set[str] = set()
+        self._new_set: set[tuple[str, int]] = set()
         self._dest_config: DestinationConfig | None = None
         self._cancel_event = threading.Event()
         self._current_file: str | None = None
@@ -322,6 +324,7 @@ class MainWindow(QMainWindow):
 
         if drive.is_camera_card:
             self._selected_drive = drive
+            protect(drive.mount_point)
             self._scan_btn.setEnabled(True)
             self._set_status(f"Camera card: {drive.label}  —  click Scan to continue")
         elif drive.is_external_drive:
@@ -376,7 +379,7 @@ class MainWindow(QMainWindow):
                     if info and info.captured_at:
                         f.captured_at = info.captured_at
 
-                new_set: set[str] = set()
+                new_set: set[tuple[str, int]] = set()
                 if config:
                     from backend.core.models import MediaType
                     checker_p = DedupChecker(config.photo_base)
@@ -386,9 +389,9 @@ class MainWindow(QMainWindow):
                     for f in result.files:
                         checker = checker_v if f.media_type == MediaType.VIDEO else checker_p
                         if not checker.exists(f):
-                            new_set.add(f.name)
+                            new_set.add((f.name, f.size_bytes))
                 else:
-                    new_set = {f.name for f in result.files}
+                    new_set = {(f.name, f.size_bytes) for f in result.files}
 
                 self._sig.scan_done.emit(result, new_set)
             except Exception as e:
@@ -420,7 +423,7 @@ class MainWindow(QMainWindow):
         if not self._scan_result or not self._dest_config:
             return
 
-        new_files = [f for f in self._scan_result.files if f.name in self._new_set]
+        new_files = [f for f in self._scan_result.files if (f.name, f.size_bytes) in self._new_set]
         config = self._dest_config
 
         errors = check_batch_space(new_files, config)
@@ -449,18 +452,22 @@ class MainWindow(QMainWindow):
         files = self._scan_result.files
 
         def _worker():
-            def on_progress(done, total, name, bytes_done, bytes_total):
-                self._sig.progress.emit(done, total, name, bytes_done, bytes_total)
+            def on_progress(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total):
+                self._sig.progress.emit(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total)
+            def on_verify(name, ok):
+                self._sig.verify_done.emit(name, ok)
             result = run_import(files, config, progress_cb=on_progress,
-                                cancel_event=self._cancel_event)
+                                verify_cb=on_verify, cancel_event=self._cancel_event)
             self._sig.import_done.emit(result)
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _on_progress(self, done: int, total: int, filename: str, bytes_done: float, bytes_total: float):
+    def _on_progress(self, done: int, total: int, filename: str, bytes_done: float, bytes_total: float, file_bytes_done: float, file_bytes_total: float):
         overall = bytes_done / bytes_total if bytes_total else 1.0
         self._progress.setValue(int(overall * 100))
-        self._file_progress.setValue(int(overall * 1000))
+
+        file_progress = file_bytes_done / file_bytes_total if file_bytes_total else 1.0
+        self._file_progress.setValue(int(file_progress * 1000))
 
         mb_done  = bytes_done  / 1_048_576
         mb_total = bytes_total / 1_048_576
@@ -469,9 +476,15 @@ class MainWindow(QMainWindow):
         if filename != self._current_file:
             self._current_file = filename
             self._file_table.mark_in_progress(filename)
-        if bytes_done == bytes_total:
+        if file_bytes_done >= file_bytes_total and file_bytes_total > 0:
             self._current_file = None
-            self._file_table.mark_copied(filename)
+            self._file_table.mark_verifying(filename)
+
+    def _on_verify_done(self, filename: str, ok: bool):
+        if ok:
+            self._file_table.mark_verified(filename)
+        else:
+            self._file_table.mark_verify_failed(filename)
 
     def _do_cancel(self):
         self._cancel_event.set()
@@ -500,6 +513,11 @@ class MainWindow(QMainWindow):
         if cancelled:
             self._set_status(f"Cancelled — {result.summary()}")
             self._import_btn.setText("Import Cancelled")
+        elif result.total_verify_failed:
+            self._set_status(
+                f"{result.summary()}  ·  ⚠ {result.total_verify_failed} file(s) failed verification"
+            )
+            self._import_btn.setText("Import Complete — Verify Errors ⚠")
         else:
             self._set_status(result.summary())
             self._import_btn.setText("Import Complete ✓")

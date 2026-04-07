@@ -55,8 +55,8 @@ def main() -> None:
     # 4. Import
     print("Checking for new files...\n")
 
-    def progress(done, total, name):
-        pct = int(done / total * 100)
+    def progress(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total):
+        pct = int(bytes_done / bytes_total * 100) if bytes_total else 0
         bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
         print(f"  [{bar}] {pct:3d}%  {name:<30}", end="\r")
 

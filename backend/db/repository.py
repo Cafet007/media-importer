@@ -81,6 +81,7 @@ def record_session(
     errors: int,
     started_at: datetime,
     finished_at: datetime,
+    verified: int = 0,
 ) -> None:
     """Record a completed import session."""
     try:
@@ -92,6 +93,7 @@ def record_session(
                 imported    = imported,
                 skipped     = skipped,
                 errors      = errors,
+                verified    = verified,
                 started_at  = started_at,
                 finished_at = finished_at,
             ))

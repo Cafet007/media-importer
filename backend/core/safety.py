@@ -174,12 +174,13 @@ def safe_copy(
     src = src.resolve()
     dst = dst.resolve()
 
-    # Create destination folder before space check (disk_usage needs it to exist)
-    dst.parent.mkdir(parents=True, exist_ok=True)
-
-    # Safety checks
+    # Safety checks that don't need the directory to exist yet
     guard_same_path(src, dst)
     guard_write(dst)
+
+    # Create destination folder (disk_usage in guard_space needs it to exist)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+
     guard_space(src, dst.parent)
 
     if dst.exists():
@@ -231,6 +232,29 @@ def safe_copy(
                 tmp_path.unlink()
             except Exception:
                 pass
+
+
+def verify_copy(dst: Path, expected_hash: str) -> bool:
+    """
+    Hash the destination file and confirm it matches expected_hash (SHA256 hex).
+    Returns True on match.
+    Raises SafetyError if the hashes differ (copy is corrupted).
+    """
+    hasher = hashlib.sha256()
+    with open(dst, "rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            hasher.update(chunk)
+    actual = hasher.hexdigest()
+    if actual != expected_hash:
+        raise SafetyError(
+            f"VERIFICATION FAILED: '{dst.name}' — "
+            f"expected {expected_hash[:12]}… got {actual[:12]}…"
+        )
+    logger.info("Verified: %s  [sha256: %s…]", dst.name, actual[:12])
+    return True
 
 
 # ---------------------------------------------------------------------------

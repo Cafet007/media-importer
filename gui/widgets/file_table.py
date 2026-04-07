@@ -189,14 +189,14 @@ class FileTable(QWidget):
         self._empty_sub.setStyleSheet(f"color: {T.TEXT_MUTED}; font-size: 13px; background: transparent;")
         self._table.setStyleSheet(T.TABLE_STYLE)
 
-    def load(self, files: list[MediaFile], new_set: set[str] | None = None):
+    def load(self, files: list[MediaFile], new_set: set[tuple[str, int]] | None = None):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(files))
 
         new_count = skipped_count = 0
 
         for row, f in enumerate(files):
-            is_new = new_set is None or f.name in new_set
+            is_new = new_set is None or (f.name, f.size_bytes) in new_set
             if is_new:
                 new_count += 1
             else:
@@ -258,6 +258,15 @@ class FileTable(QWidget):
 
     def mark_copied(self, filename: str):
         self._update_status(filename, "Copied ✓", T.SUCCESS)
+
+    def mark_verifying(self, filename: str):
+        self._update_status(filename, "Verifying…", T.WARNING)
+
+    def mark_verified(self, filename: str):
+        self._update_status(filename, "Verified ✓", T.SUCCESS)
+
+    def mark_verify_failed(self, filename: str):
+        self._update_status(filename, "Verify Failed ✗", T.DANGER)
 
     def mark_conflict(self, filename: str):
         self._update_status(filename, "Conflict ⚠", T.CONFLICT)

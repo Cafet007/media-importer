@@ -142,7 +142,7 @@ def test_run_import_calls_progress(src, config):
     f = _make_file(src, "IMG001.JPG", MediaType.PHOTO)
     calls = []
 
-    def cb(done, total, name, bytes_done, bytes_total):
+    def cb(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total):
         calls.append((done, total, name))
 
     run_import([f], config, progress_cb=cb)
