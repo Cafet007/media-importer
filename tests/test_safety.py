@@ -5,7 +5,7 @@ from pathlib import Path
 from backend.core.safety import (
     protect, unprotect, is_protected,
     guard_write, guard_delete, guard_same_path, guard_space,
-    cleanup_temp_files,
+    cleanup_temp_files, safe_copy,
     SafetyError, _protected_roots,
 )
 
@@ -66,6 +66,18 @@ def test_is_protected_true(tmp_path):
 def test_is_protected_false(tmp_path):
     other = tmp_path / "other"
     assert not is_protected(other / "file.arw")
+
+
+def test_safe_copy_never_overwrites_existing_dest(tmp_path):
+    src = tmp_path / "src.jpg"
+    dst = tmp_path / "dst.jpg"
+    src.write_bytes(b"new")
+    dst.write_bytes(b"old")
+
+    with pytest.raises(SafetyError, match="DESTINATION EXISTS"):
+        safe_copy(src, dst)
+
+    assert dst.read_bytes() == b"old"
 
 
 # ---------------------------------------------------------------------------

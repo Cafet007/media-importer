@@ -8,7 +8,7 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel,
     QTableWidget, QTableWidgetItem, QHeaderView,
-    QAbstractItemView, QStyledItemDelegate, QStyleOptionViewItem
+    QAbstractItemView, QStyledItemDelegate, QStyle, QStyleOptionViewItem
 )
 from PySide6.QtCore import Qt, QRect, QSize
 from PySide6.QtGui import QFont, QColor, QPainter, QPainterPath, QBrush
@@ -42,7 +42,7 @@ class _BadgeDelegate(QStyledItemDelegate):
     """Draws a coloured pill badge for the Kind column."""
 
     def paint(self, painter: QPainter, option: QStyleOptionViewItem, index):
-        if option.state & 0x0200:  # State_Selected
+        if option.state & QStyle.StateFlag.State_Selected:
             painter.fillRect(option.rect, QColor(T.BG_CARD_SEL))
 
         text = index.data(Qt.DisplayRole) or ""
@@ -234,14 +234,14 @@ class FileTable(QWidget):
         self._scan_info_lbl.setText("   ·   ".join(parts))
         self._scan_info_bar.setVisible(True)
 
-    def load(self, files: list[MediaFile], new_set: set[tuple[str, int]] | None = None):
+    def load(self, files: list[MediaFile], new_set: set[str] | None = None):
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(files))
 
         new_count = skipped_count = 0
 
         for row, f in enumerate(files):
-            is_new = new_set is None or (f.name, f.size_bytes) in new_set
+            is_new = new_set is None or str(f.path) in new_set
             if is_new:
                 new_count += 1
             else:

@@ -7,6 +7,7 @@ from pathlib import Path
 from backend.utils.detector import list_drives
 from backend.core.scanner import scan_card
 from backend.core.inspector import inspect_all
+from backend.core.metadata import extract_all
 from backend.core.importer import run_import
 from backend.core.rules import DestinationConfig
 
@@ -41,16 +42,17 @@ def main() -> None:
     result = scan_card(drive.mount_point)
     print(f"Found   : {result.summary()}\n")
 
-    # 3. Inspect (kind + date for all files)
+    # 3. Extract camera metadata, with mtime fallback for files missing dates
     print("Reading metadata...")
-    infos = inspect_all([f.path for f in result.files])
-
-    # Patch captured_at back onto MediaFile objects
-    info_map = {i.path: i for i in infos}
-    for f in result.files:
-        info = info_map.get(f.path)
-        if info and info.captured_at:
-            f.captured_at = info.captured_at
+    extract_all(result.files)
+    missing_date = [f for f in result.files if f.captured_at is None]
+    if missing_date:
+        infos = inspect_all([f.path for f in missing_date])
+        info_map = {i.path: i for i in infos}
+        for f in missing_date:
+            info = info_map.get(f.path)
+            if info and info.captured_at:
+                f.captured_at = info.captured_at
 
     # 4. Import
     print("Checking for new files...\n")

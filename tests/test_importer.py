@@ -28,11 +28,39 @@ def _make_file(
     return f
 
 
+def _make_nested_file(
+    src_dir: Path,
+    folder: str,
+    name: str,
+    media_type: MediaType = MediaType.PHOTO,
+    content: bytes = b"x" * 64,
+) -> MediaFile:
+    directory = src_dir / folder
+    directory.mkdir()
+    path = directory / name
+    path.write_bytes(content)
+    f = MediaFile(path=path, media_type=media_type, size=len(content))
+    f.captured_at = datetime(2026, 3, 24, 10, 0)
+    return f
+
+
 @pytest.fixture()
 def src(tmp_path: Path) -> Path:
     d = tmp_path / "SD"
     d.mkdir()
     return d
+
+
+@pytest.fixture(autouse=True)
+def isolated_db(tmp_path, monkeypatch):
+    """Keep importer tests away from the user's real import history."""
+    import backend.db.models as db_models
+    import backend.db.repository as db_repo
+
+    monkeypatch.setattr(db_models, "_DB_PATH", tmp_path / "test_history.db")
+    db_repo._engine = None
+    yield
+    db_repo._engine = None
 
 
 @pytest.fixture()
@@ -118,6 +146,32 @@ def test_run_import_multiple_files(src, config):
     assert result.total_copied == 3
 
 
+def test_run_import_conflicts_batch_collision_without_counter(src, config):
+    files = [
+        _make_nested_file(src, "a", "IMG001.JPG", content=b"a" * 64),
+        _make_nested_file(src, "b", "IMG001.JPG", content=b"b" * 64),
+    ]
+
+    result = run_import(files, config)
+
+    assert result.total_copied == 1
+    assert result.total_conflicts == 1
+
+
+def test_run_import_uses_counter_template_for_batch_collision(src, config):
+    config.templates["photo"] = "JPG/{date}/{original_name}_{counter}.{ext}"
+    files = [
+        _make_nested_file(src, "a", "IMG001.JPG", content=b"a" * 64),
+        _make_nested_file(src, "b", "IMG001.JPG", content=b"b" * 64),
+    ]
+
+    result = run_import(files, config)
+
+    assert result.total_copied == 2
+    copied_names = {dest.name for _, dest in result.copied}
+    assert copied_names == {"IMG001_001.jpg", "IMG001_002.jpg"}
+
+
 # ---------------------------------------------------------------------------
 # Dedup — skip already imported
 # ---------------------------------------------------------------------------
@@ -150,6 +204,18 @@ def test_run_import_calls_progress(src, config):
     assert all(name == "IMG001.JPG" for _, _, name in calls)
 
 
+def test_run_import_calls_verify_progress(src, config):
+    f = _make_file(src, "IMG001.JPG", MediaType.PHOTO)
+    calls = []
+
+    def cb(name, bytes_done, bytes_total):
+        calls.append((name, bytes_done, bytes_total))
+
+    run_import([f], config, verify_progress_cb=cb)
+    assert calls
+    assert calls[-1] == ("IMG001.JPG", f.size_bytes, f.size_bytes)
+
+
 # ---------------------------------------------------------------------------
 # Cancel
 # ---------------------------------------------------------------------------
@@ -178,35 +244,52 @@ def test_run_import_stores_hash(src, config):
 # Conflict — destination exists but not in dedup index
 # ---------------------------------------------------------------------------
 
-def test_run_import_skips_via_db_path(tmp_path, src, config, monkeypatch):
-    """Files previously recorded in the DB by source path are skipped even if dest was moved."""
-    # Use an isolated DB so hash collisions from the real user DB can't interfere
-    import backend.db.models as db_models
-    import backend.db.repository as db_repo
-
-    test_db = tmp_path / "test_history.db"
-    monkeypatch.setattr(db_models, "_DB_PATH", test_db)
-    db_repo._engine = None  # force re-init with new path
-
+def test_run_import_skips_via_db_path_when_recorded_dest_exists(src, config):
+    """DB history can skip if the old destination still exists under previous rules."""
     f = _make_file(src, "IMG_DB.JPG", MediaType.PHOTO, size=64)
 
     # First import — copies and records in DB
     result1 = run_import([f], config)
     assert result1.total_copied == 1
 
-    # Simulate dest being reorganized: delete the copied file from disk
-    copied_path = result1.copied[0][1]
-    copied_path.unlink()
-
-    # Second import — filesystem dedup won't find it (file is gone),
-    # but DB-path dedup should skip it
+    # Change rules so filesystem dedup at the newly resolved destination
+    # would miss the previous import, but DB history still points at an
+    # existing destination file.
+    config.templates["photo"] = "NewRules/{date}/{original_name}.{ext}"
     f2 = _make_file(src, "IMG_DB.JPG", MediaType.PHOTO, size=64)
     result2 = run_import([f2], config)
     assert result2.total_skipped == 1
     assert result2.total_copied  == 0
 
-    # Cleanup: reset engine so subsequent tests use the real DB
-    db_repo._engine = None
+
+def test_run_import_reimports_when_recorded_dest_was_deleted(src, config):
+    f = _make_file(src, "IMG_DELETED.JPG", MediaType.PHOTO, size=64)
+
+    result1 = run_import([f], config)
+    assert result1.total_copied == 1
+    result1.copied[0][1].unlink()
+
+    f2 = _make_file(src, "IMG_DELETED.JPG", MediaType.PHOTO, size=64)
+    result2 = run_import([f2], config)
+    assert result2.total_copied == 1
+    assert result2.total_skipped == 0
+
+
+def test_run_import_does_not_skip_reused_source_path_with_new_capture_date(src, config):
+    f = _make_file(src, "IMG_REUSE.JPG", MediaType.PHOTO, size=64)
+
+    result1 = run_import([f], config)
+    assert result1.total_copied == 1
+
+    copied_path = result1.copied[0][1]
+    copied_path.unlink()
+
+    f2 = _make_file(src, "IMG_REUSE.JPG", MediaType.PHOTO, size=64)
+    f2.captured_at = datetime(2026, 3, 25, 10, 0)
+
+    result2 = run_import([f2], config)
+    assert result2.total_copied == 1
+    assert result2.total_skipped == 0
 
 
 def test_run_import_conflict_when_dest_exists(src, config):

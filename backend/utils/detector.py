@@ -81,7 +81,10 @@ class DriveInfo:
         """
         if self.is_internal or self.is_camera_card:
             return False
-        return self.protocol in {"USB", "Thunderbolt", "FireWire", "USB 3.0", "Unknown"}
+        return self.protocol in {
+            "USB", "USB 3.0", "Thunderbolt", "FireWire",
+            "IEEE 1394", "1394", "Unknown",
+        }
 
     @property
     def is_internal(self) -> bool:
@@ -285,20 +288,95 @@ def _windows_drive_info(mount: Path) -> tuple[str, str, bool, str | None, str | 
         import ctypes
         drive_str = str(mount)
         drive_type = ctypes.windll.kernel32.GetDriveTypeW(drive_str)
-        # 2=Removable, 3=Fixed, 4=Network, 5=CD-ROM
-        removable = drive_type == 2
-        protocol = "USB" if removable else "Internal"
+        bus_protocol, serial = _windows_bus_info(drive_str)
+        protocol, removable = _windows_protocol_from_drive_type(drive_type, bus_protocol)
 
         # Volume serial number (32-bit int, not the physical serial)
         vol_serial = ctypes.c_ulong(0)
+        filesystem_buf = ctypes.create_unicode_buffer(32)
         ctypes.windll.kernel32.GetVolumeInformationW(
-            drive_str, None, 0, ctypes.byref(vol_serial), None, None, None, 0
+            drive_str, None, 0, ctypes.byref(vol_serial), None, None,
+            filesystem_buf, len(filesystem_buf)
         )
         volume_uuid = hex(vol_serial.value) if vol_serial.value else None
+        filesystem = filesystem_buf.value or "Unknown"
 
-        return protocol, "Unknown", removable, volume_uuid, None, None
+        return protocol, filesystem, removable, volume_uuid, None, serial
     except Exception:
-        return "Unknown", "Unknown", True, None, None, None
+        return "Internal", "Unknown", False, None, None, None
+
+
+_WINDOWS_EXTERNAL_PROTOCOLS = {
+    "USB", "USB 3.0", "Thunderbolt", "FireWire", "IEEE 1394", "1394"
+}
+
+
+def _windows_protocol_from_drive_type(
+    drive_type: int,
+    bus_protocol: str | None,
+) -> tuple[str, bool]:
+    """Map Win32 drive type + physical bus to Media Porter's protocol model."""
+    # GetDriveTypeW: 2=Removable, 3=Fixed, 4=Network, 5=CD-ROM.
+    bus = (bus_protocol or "").strip() or "Unknown"
+    if drive_type == 2:
+        return (bus if bus != "Unknown" else "USB"), True
+    if drive_type == 3:
+        if bus in _WINDOWS_EXTERNAL_PROTOCOLS:
+            return bus, False
+        return "Internal", False
+    return "Internal", False
+
+
+def _windows_bus_info(drive_str: str) -> tuple[str | None, str | None]:
+    """
+    Return physical bus protocol and serial for a Windows drive letter.
+
+    Many USB HDDs/SSDs report GetDriveTypeW == Fixed, so we need the physical
+    disk's interface type to distinguish external storage from internal disks.
+    """
+    drive_id = drive_str.rstrip("\\/")
+    script = (
+        "$ErrorActionPreference='Stop';"
+        f"$logical=Get-CimInstance Win32_LogicalDisk -Filter \"DeviceID='{drive_id}'\";"
+        "$partition=Get-CimAssociatedInstance -InputObject $logical "
+        "-Association Win32_LogicalDiskToPartition | Select-Object -First 1;"
+        "$disk=Get-CimAssociatedInstance -InputObject $partition "
+        "-Association Win32_DiskDriveToDiskPartition | Select-Object -First 1;"
+        "$disk | Select-Object InterfaceType,MediaType,SerialNumber | ConvertTo-Json -Compress"
+    )
+    try:
+        import json
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None, None
+        data = json.loads(result.stdout)
+        protocol = data.get("InterfaceType") or data.get("MediaType")
+        serial = data.get("SerialNumber")
+        return _normalize_windows_protocol(protocol), serial.strip() if isinstance(serial, str) else serial
+    except Exception as exc:
+        logger.debug("Windows bus lookup failed for %s: %s", drive_str, exc)
+        return None, None
+
+
+def _normalize_windows_protocol(value: str | None) -> str | None:
+    if not value:
+        return None
+    text = str(value).strip()
+    upper = text.upper()
+    if upper in {"USB", "USBSTOR"}:
+        return "USB"
+    if "THUNDERBOLT" in upper:
+        return "Thunderbolt"
+    if upper in {"1394", "IEEE 1394"} or "FIREWIRE" in upper:
+        return "IEEE 1394"
+    if "SD" in upper or "SECURE DIGITAL" in upper:
+        return "Secure Digital"
+    return text
 
 
 # ---------------------------------------------------------------------------

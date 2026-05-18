@@ -66,6 +66,27 @@ def test_drive_str_shows_kind():
     assert "External Drive" in str(drive)
 
 
+def test_windows_fixed_usb_maps_to_external_protocol():
+    import backend.utils.detector as det
+    protocol, removable = det._windows_protocol_from_drive_type(3, "USB")
+    assert protocol == "USB"
+    assert removable is False
+
+
+def test_windows_fixed_unknown_maps_to_internal():
+    import backend.utils.detector as det
+    protocol, removable = det._windows_protocol_from_drive_type(3, None)
+    assert protocol == "Internal"
+    assert removable is False
+
+
+def test_windows_removable_defaults_to_usb():
+    import backend.utils.detector as det
+    protocol, removable = det._windows_protocol_from_drive_type(2, None)
+    assert protocol == "USB"
+    assert removable is True
+
+
 def test_watcher_detects_insert(tmp_path):
     """Simulate a card inserted by patching _mount_points."""
     import time

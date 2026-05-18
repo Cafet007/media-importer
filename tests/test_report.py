@@ -54,6 +54,14 @@ def test_write_report_uses_session_name(src, report_dir):
     assert "wedding_2026" in path.name
 
 
+def test_write_report_can_use_exact_path(src, report_dir):
+    result = ImportResult()
+    chosen = report_dir / "chosen-name.csv"
+    path = write_report(result, report_dir, report_path=chosen)
+    assert path == chosen
+    assert path.exists()
+
+
 def test_write_report_creates_dir_if_missing(src, tmp_path):
     new_dir = tmp_path / "new" / "nested"
     result = ImportResult()

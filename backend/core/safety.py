@@ -18,6 +18,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 from typing import Callable
 
@@ -152,7 +153,76 @@ def check_batch_space(files: list, config) -> list[str]:
 # Safe file copy — atomic (temp file → rename)
 # ---------------------------------------------------------------------------
 
-_CHUNK = 4 * 1024 * 1024  # 4 MB read chunks
+_CHUNK = 16 * 1024 * 1024  # larger chunks improve video throughput
+_copy_locks_guard = threading.Lock()
+_copy_locks: dict[Path, threading.Lock] = {}
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = path.resolve()
+    with _copy_locks_guard:
+        lock = _copy_locks.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _copy_locks[key] = lock
+        return lock
+
+
+def hash_file(
+    path: Path,
+    bytes_cb: Callable[[int, int], None] | None = None,
+) -> str:
+    """Return the SHA256 hex digest for a file."""
+    total_bytes = path.stat().st_size
+    bytes_done = 0
+    hasher = hashlib.sha256()
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read(_CHUNK)
+            if not chunk:
+                break
+            hasher.update(chunk)
+            bytes_done += len(chunk)
+            if bytes_cb:
+                bytes_cb(bytes_done, total_bytes)
+    return hasher.hexdigest()
+
+
+def _destination_exists_error(dst: Path) -> SafetyError:
+    return SafetyError(
+        f"DESTINATION EXISTS: '{dst}'. "
+        "Will not overwrite — deduplicate first."
+    )
+
+
+def _commit_temp_no_overwrite(tmp_path: Path, dst: Path) -> None:
+    """
+    Commit tmp_path to dst without replacing an existing file.
+
+    On filesystems with hard-link support, os.link gives us atomic
+    "create only if absent" semantics. Some camera/media drives are exFAT and
+    do not support hard links, so we fall back to rename while the per-path app
+    lock is held.
+    """
+    if dst.exists():
+        raise _destination_exists_error(dst)
+
+    try:
+        os.link(tmp_path, dst)
+        tmp_path.unlink()
+        return
+    except FileExistsError:
+        raise _destination_exists_error(dst)
+    except OSError:
+        # Hard links are unsupported on filesystems like exFAT/FAT32.
+        # The caller holds the app-level destination lock, so this still
+        # prevents Media Porter workers from overwriting each other.
+        if dst.exists():
+            raise _destination_exists_error(dst)
+        try:
+            tmp_path.rename(dst)
+        except FileExistsError:
+            raise _destination_exists_error(dst)
 
 
 def safe_copy(
@@ -174,80 +244,75 @@ def safe_copy(
     src = src.resolve()
     dst = dst.resolve()
 
-    # Safety checks that don't need the directory to exist yet
-    guard_same_path(src, dst)
-    guard_write(dst)
+    with _lock_for(dst):
+        # Safety checks that don't need the directory to exist yet
+        guard_same_path(src, dst)
+        guard_write(dst)
 
-    # Create destination folder (disk_usage in guard_space needs it to exist)
-    dst.parent.mkdir(parents=True, exist_ok=True)
+        # Create destination folder (disk_usage in guard_space needs it to exist)
+        dst.parent.mkdir(parents=True, exist_ok=True)
 
-    guard_space(src, dst.parent)
+        guard_space(src, dst.parent)
 
-    if dst.exists():
-        raise SafetyError(
-            f"DESTINATION EXISTS: '{dst}'. "
-            "Will not overwrite — deduplicate first."
-        )
+        if dst.exists():
+            raise _destination_exists_error(dst)
 
-    total_bytes = src.stat().st_size
+        total_bytes = src.stat().st_size
 
-    # Atomic write: temp file in same directory → rename
-    tmp_path = None
-    try:
-        fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=".mporter_tmp_")
-        tmp_path = Path(tmp)
-        os.close(fd)
-
-        written = 0
-        hasher = hashlib.sha256()
-        with open(src, "rb") as fsrc, open(tmp_path, "wb") as fdst:
-            while True:
-                chunk = fsrc.read(_CHUNK)
-                if not chunk:
-                    break
-                fdst.write(chunk)
-                hasher.update(chunk)
-                written += len(chunk)
-                if bytes_cb:
-                    bytes_cb(written, total_bytes)
-
-        file_hash = hasher.hexdigest()
-
-        # Preserve file metadata (timestamps, etc.)
-        shutil.copystat(src, tmp_path)
-        tmp_path.rename(dst)
+        # Atomic write: temp file in same directory, then commit only if absent.
         tmp_path = None
+        try:
+            fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=".mporter_tmp_")
+            tmp_path = Path(tmp)
+            os.close(fd)
 
-        logger.info("Copied: %s → %s  [sha256: %s…]", src.name, dst, file_hash[:12])
-        return dst, file_hash
+            written = 0
+            hasher = hashlib.sha256()
+            with open(src, "rb") as fsrc, open(tmp_path, "wb") as fdst:
+                while True:
+                    chunk = fsrc.read(_CHUNK)
+                    if not chunk:
+                        break
+                    fdst.write(chunk)
+                    hasher.update(chunk)
+                    written += len(chunk)
+                    if bytes_cb:
+                        bytes_cb(written, total_bytes)
 
-    except SafetyError:
-        raise
-    except Exception as exc:
-        logger.error("Copy failed: %s → %s: %s", src, dst, exc)
-        raise
-    finally:
-        if tmp_path and tmp_path.exists():
-            try:
-                tmp_path.unlink()
-            except Exception:
-                pass
+            file_hash = hasher.hexdigest()
+
+            # Preserve file metadata (timestamps, etc.)
+            shutil.copystat(src, tmp_path)
+            _commit_temp_no_overwrite(tmp_path, dst)
+            tmp_path = None
+
+            logger.info("Copied: %s → %s  [sha256: %s…]", src.name, dst, file_hash[:12])
+            return dst, file_hash
+
+        except SafetyError:
+            raise
+        except Exception as exc:
+            logger.error("Copy failed: %s → %s: %s", src, dst, exc)
+            raise
+        finally:
+            if tmp_path and tmp_path.exists():
+                try:
+                    tmp_path.unlink()
+                except Exception:
+                    pass
 
 
-def verify_copy(dst: Path, expected_hash: str) -> bool:
+def verify_copy(
+    dst: Path,
+    expected_hash: str,
+    bytes_cb: Callable[[int, int], None] | None = None,
+) -> bool:
     """
     Hash the destination file and confirm it matches expected_hash (SHA256 hex).
     Returns True on match.
     Raises SafetyError if the hashes differ (copy is corrupted).
     """
-    hasher = hashlib.sha256()
-    with open(dst, "rb") as f:
-        while True:
-            chunk = f.read(_CHUNK)
-            if not chunk:
-                break
-            hasher.update(chunk)
-    actual = hasher.hexdigest()
+    actual = hash_file(dst, bytes_cb=bytes_cb)
     if actual != expected_hash:
         raise SafetyError(
             f"VERIFICATION FAILED: '{dst.name}' — "

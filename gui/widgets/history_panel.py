@@ -15,6 +15,8 @@ Layout:
 
 from __future__ import annotations
 
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -25,20 +27,38 @@ from PySide6.QtWidgets import (
     QComboBox, QDateEdit, QSizePolicy, QFrame,
     QApplication,
 )
-from PySide6.QtCore import Qt, QTimer, QDate
+from PySide6.QtCore import Qt, QTimer, QDate, QObject, Signal
 from PySide6.QtGui import QFont, QColor
 
 from gui.theme import T
 
 
+_HISTORY_LIMIT = 300
+_SESSION_LIMIT = 75
+_LOAD_CACHE_SEC = 30
+
+
+class _HistorySignals(QObject):
+    search_done = Signal(int, object, object, bool)
+    cameras_done = Signal(int, object, str)
+
+
 class HistoryPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._sig = _HistorySignals()
+        self._sig.search_done.connect(self._on_search_done)
+        self._sig.cameras_done.connect(self._on_cameras_done)
         self._debounce = QTimer()
         self._debounce.setSingleShot(True)
         self._debounce.timeout.connect(self._run_search)
         self._selected_row: int = -1
         self._records: list = []
+        self._search_token = 0
+        self._camera_token = 0
+        self._loaded_once = False
+        self._last_load_at = 0.0
+        self._cameras_loaded = False
         # Grouped mode state
         self._row_data: dict[int, object] = {}   # row_index → ImportRecord | None (None = header)
         self._group_ranges: dict[int, tuple[int, int]] = {}  # header_row → (first_data, last_data)
@@ -70,14 +90,15 @@ class HistoryPanel(QWidget):
     def _build_row1(self) -> QWidget:
         """Search box + record count + refresh button."""
         self._row1 = QWidget()
-        self._row1.setFixedHeight(44)
+        self._row1.setFixedHeight(56)
         layout = QHBoxLayout(self._row1)
-        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setContentsMargins(16, 8, 16, 8)
         layout.setSpacing(10)
 
         self._search = QLineEdit()
         self._search.setPlaceholderText("Search files…")
-        self._search.setFixedHeight(30)
+        self._search.setFixedHeight(38)
+        self._search.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._search.setClearButtonEnabled(True)
         self._search.textChanged.connect(self._on_search_changed)
         layout.addWidget(self._search, stretch=1)
@@ -86,10 +107,11 @@ class HistoryPanel(QWidget):
         f = QFont()
         f.setPixelSize(12)
         self._count_lbl.setFont(f)
+        self._count_lbl.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Fixed)
         layout.addWidget(self._count_lbl)
 
         self._refresh_btn = QPushButton("Refresh")
-        self._refresh_btn.setFixedHeight(28)
+        self._refresh_btn.setFixedHeight(32)
         self._refresh_btn.clicked.connect(self._refresh)
         layout.addWidget(self._refresh_btn)
 
@@ -98,14 +120,14 @@ class HistoryPanel(QWidget):
     def _build_row2(self) -> QWidget:
         """Camera dropdown + media type buttons + date range + clear."""
         self._row2 = QWidget()
-        self._row2.setFixedHeight(40)
+        self._row2.setFixedHeight(48)
         layout = QHBoxLayout(self._row2)
-        layout.setContentsMargins(16, 0, 16, 0)
+        layout.setContentsMargins(16, 4, 16, 8)
         layout.setSpacing(8)
 
         # Camera dropdown
         self._camera_combo = QComboBox()
-        self._camera_combo.setFixedHeight(28)
+        self._camera_combo.setFixedHeight(32)
         self._camera_combo.setMinimumWidth(140)
         self._camera_combo.addItem("All Cameras")
         self._camera_combo.currentIndexChanged.connect(self._on_filter_changed)
@@ -117,7 +139,7 @@ class HistoryPanel(QWidget):
         for label, value in [("All", ""), ("Photo", "photo"), ("RAW", "raw"), ("Video", "video")]:
             btn = QPushButton(label)
             btn.setCheckable(True)
-            btn.setFixedHeight(28)
+            btn.setFixedHeight(32)
             btn.setFixedWidth(52)
             btn.setProperty("filter_value", value)
             btn.clicked.connect(self._on_type_btn_clicked)
@@ -132,7 +154,7 @@ class HistoryPanel(QWidget):
         from_lbl.setFixedWidth(34)
         layout.addWidget(from_lbl)
         self._date_from = QDateEdit()
-        self._date_from.setFixedHeight(28)
+        self._date_from.setFixedHeight(32)
         self._date_from.setFixedWidth(110)
         self._date_from.setCalendarPopup(True)
         self._date_from.setSpecialValueText("—")
@@ -145,7 +167,7 @@ class HistoryPanel(QWidget):
         to_lbl.setFixedWidth(18)
         layout.addWidget(to_lbl)
         self._date_to = QDateEdit()
-        self._date_to.setFixedHeight(28)
+        self._date_to.setFixedHeight(32)
         self._date_to.setFixedWidth(110)
         self._date_to.setCalendarPopup(True)
         self._date_to.setSpecialValueText("—")
@@ -158,7 +180,7 @@ class HistoryPanel(QWidget):
 
         # Clear filters button
         self._clear_btn = QPushButton("Clear Filters")
-        self._clear_btn.setFixedHeight(28)
+        self._clear_btn.setFixedHeight(32)
         self._clear_btn.setVisible(False)
         self._clear_btn.clicked.connect(self._clear_filters)
         layout.addWidget(self._clear_btn)
@@ -290,7 +312,17 @@ class HistoryPanel(QWidget):
         self._row2.setStyleSheet(bar_bg)
         self._bar_div.setStyleSheet(f"background: {T.DIVIDER};")
 
-        self._search.setStyleSheet(T.INPUT_STYLE)
+        self._search.setStyleSheet(f"""
+            QLineEdit {{
+                background: {T.BG_INPUT};
+                border: 1.5px solid {T.BORDER};
+                border-radius: 8px;
+                padding: 0 11px;
+                color: {T.TEXT_PRIMARY};
+                font-size: 13px;
+            }}
+            QLineEdit:focus {{ border: 1.5px solid {T.BORDER_FOCUS}; }}
+        """)
         self._count_lbl.setStyleSheet(f"color: {T.TEXT_SECONDARY}; background: transparent;")
         self._refresh_btn.setStyleSheet(T.small_btn_style())
         self._clear_btn.setStyleSheet(T.small_btn_style())
@@ -366,7 +398,11 @@ class HistoryPanel(QWidget):
 
     def load(self):
         """Called by main_window when switching to the History tab."""
-        self._reload_cameras()
+        now = time.monotonic()
+        if self._loaded_once and now - self._last_load_at < _LOAD_CACHE_SEC:
+            return
+        if not self._cameras_loaded:
+            self._reload_cameras()
         self._run_search()
 
     # ------------------------------------------------------------------
@@ -390,6 +426,8 @@ class HistoryPanel(QWidget):
         self._run_search()
 
     def _refresh(self):
+        self._loaded_once = False
+        self._cameras_loaded = False
         self._reload_cameras()
         self._run_search()
 
@@ -440,19 +478,34 @@ class HistoryPanel(QWidget):
         )
 
     def _run_search(self):
-        from backend.db.repository import search_history, get_history, get_sessions
-
+        self._search_token += 1
+        token = self._search_token
         self._count_lbl.setText("Loading…")
 
-        if not self._is_filter_active():
-            records = get_history(limit=2000)
-            sessions = get_sessions(limit=200)
-            self._records = records
-            self._populate_grouped(records, sessions)
-            return
+        params = self._search_params()
+        threading.Thread(
+            target=self._run_search_worker,
+            args=(token, params),
+            daemon=True,
+            name="HistorySearch",
+        ).start()
 
-        query      = self._search.text().strip()
-        camera     = self._camera_combo.currentText() if self._camera_combo.currentIndex() > 0 else ""
+    def _reload_cameras(self):
+        self._camera_token += 1
+        token = self._camera_token
+        current = self._camera_combo.currentText()
+
+        def _worker():
+            from backend.db.repository import get_distinct_cameras
+            cameras = get_distinct_cameras()
+            self._sig.cameras_done.emit(token, cameras, current)
+
+        threading.Thread(target=_worker, daemon=True, name="HistoryCameras").start()
+
+    def _search_params(self) -> dict:
+        grouped = not self._is_filter_active()
+        query = self._search.text().strip()
+        camera = self._camera_combo.currentText() if self._camera_combo.currentIndex() > 0 else ""
         media_type = next((v for v, b in self._type_btns.items() if b.isChecked() and v), "")
 
         min_date = self._date_from.minimumDate()
@@ -466,20 +519,49 @@ class HistoryPanel(QWidget):
             d = self._date_to.date()
             date_to = datetime(d.year(), d.month(), d.day(), 23, 59, 59)
 
-        records = search_history(
-            query=query,
-            camera=camera,
-            media_type=media_type,
-            date_from=date_from,
-            date_to=date_to,
-        )
-        self._records = records
-        self._populate_table(records)
+        return {
+            "grouped": grouped,
+            "query": query,
+            "camera": camera,
+            "media_type": media_type,
+            "date_from": date_from,
+            "date_to": date_to,
+        }
 
-    def _reload_cameras(self):
-        from backend.db.repository import get_distinct_cameras
-        cameras = get_distinct_cameras()
-        current = self._camera_combo.currentText()
+    def _run_search_worker(self, token: int, params: dict):
+        from backend.db.repository import search_history, get_history, get_sessions
+
+        if params["grouped"]:
+            records = get_history(limit=_HISTORY_LIMIT)
+            sessions = get_sessions(limit=_SESSION_LIMIT)
+            self._sig.search_done.emit(token, records, sessions, True)
+            return
+
+        records = search_history(
+            query=params["query"],
+            camera=params["camera"],
+            media_type=params["media_type"],
+            date_from=params["date_from"],
+            date_to=params["date_to"],
+            limit=_HISTORY_LIMIT,
+        )
+        self._sig.search_done.emit(token, records, [], False)
+
+    def _on_search_done(self, token: int, records: list, sessions: list, grouped: bool):
+        if token != self._search_token:
+            return
+        self._loaded_once = True
+        self._last_load_at = time.monotonic()
+        self._records = records
+        if grouped:
+            self._populate_grouped(records, sessions)
+        else:
+            self._populate_table(records)
+
+    def _on_cameras_done(self, token: int, cameras: list[str], current: str):
+        if token != self._camera_token:
+            return
+        self._cameras_loaded = True
 
         self._camera_combo.blockSignals(True)
         self._camera_combo.clear()
@@ -497,6 +579,14 @@ class HistoryPanel(QWidget):
     # ------------------------------------------------------------------
 
     def _populate_table(self, records: list):
+        self._begin_table_reset()
+        try:
+            self._populate_table_rows(records)
+        finally:
+            self._end_table_reset()
+
+    def _populate_table_rows(self, records: list):
+        self._table.clearSpans()
         self._table.setSortingEnabled(False)
         self._table.setRowCount(len(records))
 
@@ -536,6 +626,14 @@ class HistoryPanel(QWidget):
 
     def _populate_grouped(self, records: list, sessions: list):
         """Group records by import session. Shows session header rows with expand/collapse."""
+        self._begin_table_reset()
+        try:
+            self._populate_grouped_rows(records, sessions)
+        finally:
+            self._end_table_reset()
+
+    def _populate_grouped_rows(self, records: list, sessions: list):
+        self._table.clearSpans()
         self._table.setSortingEnabled(False)
         self._detail.setVisible(False)
         self._selected_row = -1
@@ -548,27 +646,7 @@ class HistoryPanel(QWidget):
         groups: list[tuple[object | None, list]] = []  # (session | None, [records])
 
         if sessions:
-            session_buckets: list[list] = [[] for _ in sessions]
-            unassigned: list = []
-
-            for rec in records:
-                matched = False
-                if rec.imported_at:
-                    for i, sess in enumerate(sessions):
-                        s_start = sess.started_at
-                        s_end   = sess.finished_at
-                        if s_start and s_end and s_start <= rec.imported_at <= s_end:
-                            session_buckets[i].append(rec)
-                            matched = True
-                            break
-                if not matched:
-                    unassigned.append(rec)
-
-            for sess, bucket in zip(sessions, session_buckets):
-                if bucket:
-                    groups.append((sess, bucket))
-            if unassigned:
-                groups.append((None, unassigned))
+            groups = self._group_records_by_session(records, sessions)
         else:
             # No sessions recorded — show all as one ungrouped block
             if records:
@@ -639,6 +717,44 @@ class HistoryPanel(QWidget):
         except RuntimeError:
             pass
         self._table.cellClicked.connect(self._on_header_cell_clicked)
+
+    def _begin_table_reset(self):
+        self._table.setUpdatesEnabled(False)
+        self._table.blockSignals(True)
+
+    def _end_table_reset(self):
+        self._table.blockSignals(False)
+        self._table.setUpdatesEnabled(True)
+        self._table.viewport().update()
+
+    def _group_records_by_session(self, records: list, sessions: list) -> list[tuple[object | None, list]]:
+        buckets: dict[object, list] = {sess: [] for sess in sessions}
+        unassigned: list = []
+
+        valid_sessions = [
+            sess for sess in sessions
+            if getattr(sess, "started_at", None) and getattr(sess, "finished_at", None)
+        ]
+
+        for rec in records:
+            imported_at = getattr(rec, "imported_at", None)
+            matched_session = None
+            if imported_at:
+                # Sessions are newest-first and few after limiting, so this is
+                # cheap while avoiding DB work on the UI thread.
+                for sess in valid_sessions:
+                    if sess.started_at <= imported_at <= sess.finished_at:
+                        matched_session = sess
+                        break
+            if matched_session:
+                buckets[matched_session].append(rec)
+            else:
+                unassigned.append(rec)
+
+        groups = [(sess, buckets[sess]) for sess in sessions if buckets.get(sess)]
+        if unassigned:
+            groups.append((None, unassigned))
+        return groups
 
     def _style_header_row(self, header_row: int, collapsed: bool):
         item = self._table.item(header_row, 0)

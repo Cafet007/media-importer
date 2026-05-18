@@ -123,6 +123,49 @@ class Theme:
         """
 
     @property
+    def MENU_STYLE(self) -> str:
+        return f"""
+            QMenuBar {{
+                background: {self.BG_HEADER};
+                color: {self.TEXT_PRIMARY};
+                border-bottom: 1px solid {self.DIVIDER};
+                padding: 4px 10px;
+                spacing: 6px;
+            }}
+            QMenuBar::item {{
+                background: transparent;
+                color: {self.TEXT_PRIMARY};
+                padding: 6px 10px;
+                border-radius: 7px;
+            }}
+            QMenuBar::item:selected {{
+                background: {self._TAB_HOVER_BG};
+            }}
+            QMenu {{
+                background: {self.BG_PANEL};
+                color: {self.TEXT_PRIMARY};
+                border: 1px solid {self.BORDER};
+                border-radius: 10px;
+                padding: 8px;
+            }}
+            QMenu::item {{
+                padding: 8px 28px 8px 12px;
+                border-radius: 6px;
+            }}
+            QMenu::item:selected {{
+                background: {self.BG_CARD_SEL};
+            }}
+            QMenu::item:checked {{
+                background: {self.BG_CARD_SEL};
+            }}
+            QMenu::separator {{
+                height: 1px;
+                background: {self.DIVIDER};
+                margin: 6px 8px;
+            }}
+        """
+
+    @property
     def SEGMENT_STYLE(self) -> str:
         return f"""
             QWidget#segContainer {{

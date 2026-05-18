@@ -104,6 +104,35 @@ def get_imported_source_paths(source_paths: list[str]) -> set[str]:
         return set()
 
 
+def get_imported_source_records(source_paths: list[str]) -> dict[str, list[tuple[int | None, datetime | None, str | None]]]:
+    """
+    Return previous import fingerprints keyed by source path.
+
+    Source paths on removable cards can be reused, so callers should treat these
+    records as a hint and compare size/capture date before skipping a file.
+    """
+    if not source_paths:
+        return {}
+    try:
+        with Session(_get_engine()) as session:
+            rows = (
+                session.query(
+                    ImportRecord.source_path,
+                    ImportRecord.file_size,
+                    ImportRecord.captured_at,
+                    ImportRecord.dest_path,
+                )
+                .filter(ImportRecord.source_path.in_(source_paths))
+                .all()
+            )
+            result: dict[str, list[tuple[int | None, datetime | None, str | None]]] = {}
+            for source_path, file_size, captured_at, dest_path in rows:
+                result.setdefault(source_path, []).append((file_size, captured_at, dest_path))
+            return result
+    except Exception:
+        return {}
+
+
 # ---------------------------------------------------------------------------
 # Sessions
 # ---------------------------------------------------------------------------

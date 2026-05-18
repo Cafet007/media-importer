@@ -3,7 +3,8 @@ Main Window — top-level application window.
 
 Layout:
   ┌──────────────────────────────────────────────────────────────┐
-  │  Toolbar: title · status · [Files][History] · [◐] [Settings]│
+  │  Native menu bar: View · Settings                           │
+  │  Toolbar: title · status                                    │
   ├──────────────┬──────────────────────────────┬───────────────┤
   │ Source Panel │  FileTable / HistoryPanel     │  Dest Panel   │
   │  (sidebar)   │     (stacked, stretches)      │  (right col)  │
@@ -16,14 +17,15 @@ from __future__ import annotations
 
 import logging
 import threading
+from pathlib import Path
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QProgressBar, QSplitter,
-    QStatusBar, QMessageBox, QStackedWidget, QButtonGroup,
+    QStatusBar, QMessageBox, QStackedWidget,
     QFileDialog,
 )
 from PySide6.QtCore import Qt, Signal, QObject
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QAction, QActionGroup, QFont
 from gui.widgets.source_panel import ElidedLabel
 
 from backend.utils.detector import DriveInfo
@@ -33,8 +35,8 @@ from backend.utils.config import (
 )
 from backend.core.scanner import scan_card
 from backend.core.inspector import inspect_all
-from backend.core.dedup import DedupChecker
-from backend.core.importer import run_import
+from backend.core.metadata import extract_all
+from backend.core.importer import plan_import, run_import
 from backend.core.rules import DestinationConfig
 from backend.core.safety import check_batch_space, protect
 
@@ -50,6 +52,7 @@ logger = logging.getLogger(__name__)
 class _Signals(QObject):
     scan_done   = Signal(object, object)
     progress    = Signal(int, int, str, float, float, float, float)
+    verify_progress = Signal(str, float, float)
     verify_done = Signal(str, bool)
     import_done = Signal(object)
     status      = Signal(str)
@@ -64,17 +67,22 @@ class MainWindow(QMainWindow):
         self._sig = _Signals()
         self._sig.scan_done.connect(self._on_scan_done)
         self._sig.progress.connect(self._on_progress)
+        self._sig.verify_progress.connect(self._on_verify_progress)
         self._sig.verify_done.connect(self._on_verify_done)
         self._sig.import_done.connect(self._on_import_done)
         self._sig.status.connect(self._set_status)
 
         self._scan_result = None
-        self._new_set: set[tuple[str, int]] = set()
+        self._new_set: set[str] = set()
         self._dest_config: DestinationConfig | None = None
         self._cancel_event = threading.Event()
         self._current_file: str | None = None
         self._importing = False
         self._last_import_result = None
+        self._source_panel_visible = True
+        self._dest_panel_visible = True
+        self._last_source_width = 240
+        self._last_dest_width = 260
 
         T.set_dark(get_dark_mode())
         self._build_ui()
@@ -86,6 +94,8 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _build_ui(self):
+        self._build_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -115,6 +125,9 @@ class MainWindow(QMainWindow):
         self._splitter.addWidget(self._dest_panel)
 
         self._splitter.setSizes([240, 620, 260])
+        self._splitter.setCollapsible(0, True)
+        self._splitter.setCollapsible(1, False)
+        self._splitter.setCollapsible(2, True)
         root.addWidget(self._splitter, stretch=1)
 
         root.addWidget(self._build_action_bar())
@@ -123,6 +136,52 @@ class MainWindow(QMainWindow):
         self._status_bar.setSizeGripEnabled(False)
         self.setStatusBar(self._status_bar)
         self._set_status("Ready — plug in your SD card")
+
+    def _build_menu_bar(self):
+        self._menu_bar = self.menuBar()
+        self._menu_bar.setNativeMenuBar(True)
+
+        self._view_menu = self._menu_bar.addMenu("View")
+
+        self._files_action = QAction("Files", self)
+        self._files_action.setCheckable(True)
+        self._files_action.triggered.connect(lambda _checked=False: self._switch_view(0))
+
+        self._history_action = QAction("History", self)
+        self._history_action.setCheckable(True)
+        self._history_action.triggered.connect(lambda _checked=False: self._switch_view(1))
+
+        self._view_group = QActionGroup(self)
+        self._view_group.setExclusive(True)
+        self._view_group.addAction(self._files_action)
+        self._view_group.addAction(self._history_action)
+
+        self._dark_mode_action = QAction("Dark Mode", self)
+        self._dark_mode_action.setCheckable(True)
+        self._dark_mode_action.toggled.connect(self._set_dark_mode)
+
+        self._show_drives_action = QAction("Show Drives Sidebar", self)
+        self._show_drives_action.setCheckable(True)
+        self._show_drives_action.setChecked(True)
+        self._show_drives_action.toggled.connect(self._set_source_panel_visible)
+
+        self._show_destination_action = QAction("Show Destination Sidebar", self)
+        self._show_destination_action.setCheckable(True)
+        self._show_destination_action.setChecked(True)
+        self._show_destination_action.toggled.connect(self._set_dest_panel_visible)
+
+        self._view_menu.addAction(self._files_action)
+        self._view_menu.addAction(self._history_action)
+        self._view_menu.addSeparator()
+        self._view_menu.addAction(self._show_drives_action)
+        self._view_menu.addAction(self._show_destination_action)
+        self._view_menu.addSeparator()
+        self._view_menu.addAction(self._dark_mode_action)
+
+        self._settings_menu = self._menu_bar.addMenu("Settings")
+        self._folder_rules_action = QAction("Folder Naming Rules…", self)
+        self._folder_rules_action.triggered.connect(self._open_settings)
+        self._settings_menu.addAction(self._folder_rules_action)
 
     def _build_toolbar(self) -> QWidget:
         self._toolbar = QWidget()
@@ -147,48 +206,6 @@ class MainWindow(QMainWindow):
         self._header_status.setFont(QFont("Arial", 12))
         self._header_status.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
         layout.addWidget(self._header_status, stretch=1)
-
-        # Segmented tab control
-        self._seg_container = QWidget()
-        self._seg_container.setObjectName("segContainer")
-        self._seg_container.setFixedHeight(36)
-        seg_layout = QHBoxLayout(self._seg_container)
-        seg_layout.setContentsMargins(3, 3, 3, 3)
-        seg_layout.setSpacing(1)
-
-        self._files_btn = QPushButton("Files")
-        self._files_btn.setCheckable(True)
-        self._files_btn.setChecked(True)
-        self._files_btn.setFixedHeight(30)
-        self._files_btn.clicked.connect(lambda: self._switch_view(0))
-
-        self._history_btn = QPushButton("History")
-        self._history_btn.setCheckable(True)
-        self._history_btn.setFixedHeight(30)
-        self._history_btn.clicked.connect(lambda: self._switch_view(1))
-
-        self._tab_group = QButtonGroup(self)
-        self._tab_group.setExclusive(True)
-        self._tab_group.addButton(self._files_btn, 0)
-        self._tab_group.addButton(self._history_btn, 1)
-
-        seg_layout.addWidget(self._files_btn)
-        seg_layout.addWidget(self._history_btn)
-        layout.addWidget(self._seg_container)
-
-        layout.addSpacing(6)
-
-        # Theme toggle + Settings
-        self._theme_btn = QPushButton()
-        self._theme_btn.setFixedSize(68, 32)
-        self._theme_btn.setToolTip("Toggle dark / light mode")
-        self._theme_btn.clicked.connect(self._toggle_theme)
-        layout.addWidget(self._theme_btn)
-
-        self._settings_btn = QPushButton("Settings")
-        self._settings_btn.setFixedHeight(32)
-        self._settings_btn.clicked.connect(self._open_settings)
-        layout.addWidget(self._settings_btn)
 
         return self._toolbar
 
@@ -256,8 +273,11 @@ class MainWindow(QMainWindow):
     # Theme
     # ------------------------------------------------------------------
 
-    def _toggle_theme(self):
-        T.set_dark(not T.dark)
+    def _set_dark_mode(self, enabled: bool):
+        if T.dark == enabled:
+            return
+
+        T.set_dark(enabled)
         save_dark_mode(T.dark)
         self._apply_theme()
 
@@ -267,14 +287,17 @@ class MainWindow(QMainWindow):
             f" QLabel {{ background: transparent; }}"
         )
 
+        self._menu_bar.setStyleSheet(T.MENU_STYLE)
+
         # Toolbar
         self._toolbar.setStyleSheet(T.TOOLBAR_STYLE)
         self._app_title.setStyleSheet(f"color: {T.TEXT_PRIMARY};")
         self._header_status.setStyleSheet(f"color: {T.TEXT_SECONDARY}; font-size: 13px;")
-        self._seg_container.setStyleSheet(T.SEGMENT_STYLE)
-        self._theme_btn.setText("Light" if T.dark else "Dark")
-        self._theme_btn.setStyleSheet(T.btn_secondary(h=32))
-        self._settings_btn.setStyleSheet(T.btn_secondary(h=32))
+        self._sync_view_controls(self._stack.currentIndex())
+
+        was_blocked = self._dark_mode_action.blockSignals(True)
+        self._dark_mode_action.setChecked(T.dark)
+        self._dark_mode_action.blockSignals(was_blocked)
 
         # Splitter
         self._splitter.setStyleSheet(
@@ -310,8 +333,38 @@ class MainWindow(QMainWindow):
 
     def _switch_view(self, index: int):
         self._stack.setCurrentIndex(index)
+        self._sync_view_controls(index)
         if index == 1:
             self._history_panel.load()
+
+    def _sync_view_controls(self, index: int):
+        self._files_action.setChecked(index == 0)
+        self._history_action.setChecked(index == 1)
+
+    def _set_source_panel_visible(self, visible: bool):
+        self._source_panel_visible = visible
+        self._apply_splitter_visibility()
+
+    def _set_dest_panel_visible(self, visible: bool):
+        self._dest_panel_visible = visible
+        self._apply_splitter_visibility()
+
+    def _apply_splitter_visibility(self):
+        sizes = self._splitter.sizes()
+        if len(sizes) >= 3:
+            if self._source_panel.isVisible() and sizes[0] > 0:
+                self._last_source_width = sizes[0]
+            if self._dest_panel.isVisible() and sizes[2] > 0:
+                self._last_dest_width = sizes[2]
+
+        self._source_panel.setVisible(self._source_panel_visible)
+        self._dest_panel.setVisible(self._dest_panel_visible)
+
+        total_width = sum(sizes) if sizes else max(self.width(), 1120)
+        source_width = self._last_source_width if self._source_panel_visible else 0
+        dest_width = self._last_dest_width if self._dest_panel_visible else 0
+        center_width = max(420, total_width - source_width - dest_width)
+        self._splitter.setSizes([source_width, center_width, dest_width])
 
     # ------------------------------------------------------------------
     # Event handlers
@@ -353,7 +406,15 @@ class MainWindow(QMainWindow):
         self._dest_config = config
         save_dest_paths(config.photo_base, config.video_base)
 
-        if not self._importing and self._scan_result and self._new_set:
+        if not self._importing and self._scan_result:
+            plan = plan_import(self._scan_result.files, config, verify_existing=False)
+            self._new_set = {str(item.file.path) for item in plan.to_copy}
+            self._file_table.load(self._scan_result.files, self._new_set)
+            if self._scan_result.profile:
+                self._file_table.set_scan_info(
+                    self._scan_result.profile.name,
+                    self._scan_result.roots_scanned,
+                )
             new_count = len(self._new_set)
             self._import_btn.setEnabled(new_count > 0)
             self._import_btn.setText(
@@ -377,33 +438,28 @@ class MainWindow(QMainWindow):
         self._progress.setValue(0)
         self._set_status("Scanning SD card…")
         self._switch_view(0)
-        self._files_btn.setChecked(True)
         logger.info("Scan started: %s", drive.mount_point)
         config = self._dest_config
 
         def _worker():
             try:
                 result = scan_card(drive.mount_point)
-                infos = inspect_all([f.path for f in result.files])
-                info_map = {i.path: i for i in infos}
-                for f in result.files:
-                    info = info_map.get(f.path)
-                    if info and info.captured_at:
-                        f.captured_at = info.captured_at
+                extract_all(result.files)
+                missing_date = [f for f in result.files if f.captured_at is None]
+                if missing_date:
+                    infos = inspect_all([f.path for f in missing_date])
+                    info_map = {i.path: i for i in infos}
+                    for f in missing_date:
+                        info = info_map.get(f.path)
+                        if info and info.captured_at:
+                            f.captured_at = info.captured_at
 
-                new_set: set[tuple[str, int]] = set()
+                new_set: set[str] = set()
                 if config:
-                    from backend.core.models import MediaType
-                    checker_p = DedupChecker(config.photo_base)
-                    checker_v = DedupChecker(config.video_base)
-                    checker_p.build_index()
-                    checker_v.build_index()
-                    for f in result.files:
-                        checker = checker_v if f.media_type == MediaType.VIDEO else checker_p
-                        if not checker.exists(f):
-                            new_set.add((f.name, f.size_bytes))
+                    plan = plan_import(result.files, config, verify_existing=False)
+                    new_set = {str(item.file.path) for item in plan.to_copy}
                 else:
-                    new_set = {(f.name, f.size_bytes) for f in result.files}
+                    new_set = {str(f.path) for f in result.files}
 
                 self._sig.scan_done.emit(result, new_set)
             except Exception as e:
@@ -447,7 +503,7 @@ class MainWindow(QMainWindow):
         if not self._scan_result or not self._dest_config:
             return
 
-        new_files = [f for f in self._scan_result.files if (f.name, f.size_bytes) in self._new_set]
+        new_files = [f for f in self._scan_result.files if str(f.path) in self._new_set]
         config = self._dest_config
 
         errors = check_batch_space(new_files, config)
@@ -473,15 +529,19 @@ class MainWindow(QMainWindow):
         self._set_status("Importing…")
         logger.info("Import started: %d new files", len(new_files))
 
-        files = self._scan_result.files
+        files = new_files
 
         def _worker():
             def on_progress(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total):
                 self._sig.progress.emit(done, total, name, bytes_done, bytes_total, file_bytes_done, file_bytes_total)
+            def on_verify_progress(name, bytes_done, bytes_total):
+                self._sig.verify_progress.emit(name, bytes_done, bytes_total)
             def on_verify(name, ok):
                 self._sig.verify_done.emit(name, ok)
             result = run_import(files, config, progress_cb=on_progress,
-                                verify_cb=on_verify, cancel_event=self._cancel_event)
+                                verify_cb=on_verify,
+                                verify_progress_cb=on_verify_progress,
+                                cancel_event=self._cancel_event)
             self._sig.import_done.emit(result)
 
         threading.Thread(target=_worker, daemon=True).start()
@@ -503,6 +563,14 @@ class MainWindow(QMainWindow):
         if file_bytes_done >= file_bytes_total and file_bytes_total > 0:
             self._current_file = None
             self._file_table.mark_verifying(filename)
+
+    def _on_verify_progress(self, filename: str, bytes_done: float, bytes_total: float):
+        verify_progress = bytes_done / bytes_total if bytes_total else 1.0
+        self._file_progress.setValue(int(verify_progress * 1000))
+        mb_done = bytes_done / 1_048_576
+        mb_total = bytes_total / 1_048_576
+        self._set_status(f"Verifying  —  {filename}  ({mb_done:.0f} / {mb_total:.0f} MB)")
+        self._file_table.mark_verifying(filename)
 
     def _on_verify_done(self, filename: str, ok: bool):
         if ok:
@@ -570,7 +638,7 @@ class MainWindow(QMainWindow):
         dest_path = Path(path)
         try:
             written = write_report(self._last_import_result, dest_path.parent,
-                                   session_name=dest_path.stem)
+                                   report_path=dest_path)
             self._set_status(f"Report saved: {written}")
         except Exception as e:
             QMessageBox.critical(self, "Save Report Failed", str(e))

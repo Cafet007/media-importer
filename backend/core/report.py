@@ -21,7 +21,12 @@ from .importer import ImportResult
 logger = logging.getLogger(__name__)
 
 
-def write_report(result: ImportResult, dest_dir: Path, session_name: str = "") -> Path:
+def write_report(
+    result: ImportResult,
+    dest_dir: Path,
+    session_name: str = "",
+    report_path: Path | None = None,
+) -> Path:
     """
     Write a CSV import report to dest_dir.
 
@@ -31,10 +36,14 @@ def write_report(result: ImportResult, dest_dir: Path, session_name: str = "") -
     Returns the path to the written file.
     Raises OSError if the directory cannot be written to.
     """
-    timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-    slug = f"_{session_name.strip()}" if session_name.strip() else ""
-    filename = f"media-porter-report_{timestamp}{slug}.csv"
-    report_path = dest_dir / filename
+    if report_path is None:
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        slug = f"_{session_name.strip()}" if session_name.strip() else ""
+        filename = f"media-porter-report_{timestamp}{slug}.csv"
+        report_path = dest_dir / filename
+    else:
+        report_path = Path(report_path)
+        dest_dir = report_path.parent
 
     dest_dir.mkdir(parents=True, exist_ok=True)
 
